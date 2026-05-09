@@ -472,6 +472,26 @@ If Claude is uncertain whether a command is safe, the answer is don't send it.
 Ask Vlad. The cost of a one-day delay is zero. The cost of a brick is £1400+
 and breaks Vlad's trust in this project, which kills it.
 
+### Observed gotcha: in-place plaintext mutation can desync state
+
+Live test 2026-05-09 evening: after several rounds of BCryptDecrypt
+plaintext mutation in UserSessionHelper, the matrix Apply pipeline got
+into a state where new UI Apply clicks did NOT reach UserSessionHelper
+(the cmd-listing hook saw NO SetMatrixLED for 60s while Vlad clicked
+Apply). The state was self-recoverable by closing Armoury Crate and
+reopening; no permanent harm.
+
+Likely cause: one of our OVERFLOW refusals (where new plaintext was
+4 bytes larger than cbOutput allowed, so we left the buffer with the
+ORIGINAL bytes but possibly with our partial pcbResult update) confused
+the downstream parser, which silently dropped subsequent commands.
+
+Fix for production Polylux:
+  - When refusing on OVERFLOW, do NOT update pcbResult (we don't currently —
+    good).
+  - Add a warning when refusing so users know a state desync is possible.
+  - Document: "if matrix stops responding, restart Armoury Crate."
+
 ## 11. Constraints / non-negotiables
 
 - **MIT license.**
