@@ -14,15 +14,20 @@ dist/
 
 # Inside scratch/, keep .py / .js / .md / .txt (research notes); ignore everything else.
 scratch/captures/
-scratch/*.pcap
-scratch/*.pcapng
-scratch/*.bin
-scratch/*.gif
-scratch/*.jpg
-scratch/*.jpeg
-scratch/*.png
-scratch/*.avi
-scratch/*.mp4
+scratch/backups/
+scratch/**/*.pcap
+scratch/**/*.pcapng
+scratch/**/*.bin
+scratch/**/*.gif
+scratch/**/*.jpg
+scratch/**/*.jpeg
+scratch/**/*.png
+scratch/**/*.avi
+scratch/**/*.mp4
+
+# Per-user safety backups of ASUS proprietary content — never publish.
+# Recreate on each machine via the procedure documented in
+# docs/PROJECT_STATE.md §10b.
 
 # Per-machine config
 config.local.yaml
