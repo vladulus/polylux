@@ -1,0 +1,13 @@
+# Polylux configuration. Override per device.
+# Run with: python -m polylux.service
+
+matrix:
+  enabled: true
+  mode: force_color   # the only mode in v0.1
+  color: [0, 255, 0]  # RGB — change to whatever you want
+
+oled:
+  enabled: false      # not yet implemented
+
+ryujin_lcd:
+  enabled: false      # not yet implemented
