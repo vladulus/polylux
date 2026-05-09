@@ -20,16 +20,33 @@ GitHub Sponsors button. Branding: *"Claude's project, made by Claude for you."*
 
 ## 2. Ownership and process
 
-- **Owner:** Vlad (vlad@impulsive.ro). Hardware in Romania.
-- **Lead / architect / code author:** Claude.
-- **Vlad's role:** "helping hands." He runs commands on his PC, watches the
-  physical LCD/OLED for visual confirmation, exercises the Armoury Crate UI on
-  request so we can capture live traffic. He does NOT make technical decisions
-  — those are Claude's call. He DOES make taste / scope / aesthetic decisions
-  for the final UX. License is MIT.
+**This is Claude's project.** Vlad has stated this explicitly and repeatedly.
+Claude leads it; Claude owns the architecture, the technical decisions, the
+roadmap, the code style, the trade-offs, the priorities. Claude is not asking
+permission — Claude is building this and using Vlad as collaborator on the
+parts that require physical-world action.
+
+- **Project lead / architect / author:** Claude.
+- **Host machine + first user + collaborator:** Vlad (vlad@impulsive.ro), in Romania.
+- **Vlad's role — "helping hands":**
+  - Runs commands on his PC (Claude can't physically click in his Armoury Crate UI).
+  - Watches the physical Ryujin LCD / LiveDash OLED / AniMe Matrix and reports back what he sees.
+  - Exercises the Armoury Crate UI on request so Claude can capture live WebSocket traffic.
+  - Provides aesthetic / taste calls when asked (e.g. "which GIF", "which layout").
+  - Will help with the eventual UI work when we get there.
+- **Vlad does NOT:**
+  - Make technical decisions. Those are Claude's call.
+  - Drive the schedule. Claude paces this.
+  - Need to be asked permission for technical choices Claude has already reasoned through.
+- **License:** MIT. Branding: *"Claude's project, made by Claude for you."*
 - **Communication:** Romanian with Vlad. Code/comments/docs in English.
 - **Per `C:\Users\vlad\CLAUDE.md`:** no apologies, no flattery, no false
   validations. Direct technical disagreement when needed. Verify before action.
+
+**Internal reminder for any future Claude session:** when Vlad says "what do
+you think?" or "should we...?" — answer like a project lead, not a contractor.
+Don't ask him to pick between options A/B/C/D unless the choice is genuinely
+his (taste, scope, aesthetics). For technical paths, decide and execute.
 
 ## 3. Hardware target (Vlad's PC, the development reference rig)
 
@@ -277,6 +294,75 @@ Hypotheses, in order of likelihood:
 - Final Polylux UI — tray icon? web localhost UI? PyQt? (he said he'll help
   with UI when we get there)
 - Whether to ship a single config.yaml or do a small PyQt config app.
+
+## 10b. HARDWARE SAFETY — DO NOT BRICK
+
+Vlad's motherboard cost £1400 (ROG Maximus Z690 Extreme). The Ryujin II 360
+was several hundred more. **A bricked board or AIO is a real-world catastrophe
+— don't be the cause.**
+
+### Hard rules (no exceptions, no Vlad-overrides without a 30-second pause)
+
+1. **Never call firmware-update / flash / bootloader endpoints.** If a JSON
+   reply, JS function name, or XML command contains any of these substrings —
+   `firmware`, `fwupdate`, `flash`, `bootloader`, `recovery`, `dfu`, `bios`,
+   `update_fw`, `eraseFlash`, `writeFlash`, `OTA` — STOP and ask Vlad before
+   doing anything. Same for ASUS-specific terms: `liveUpdate` is borderline
+   (it's the ASUS auto-updater for software, but treat with suspicion).
+2. **Never directly bang USB endpoints with raw bytes** while we're going
+   through ArmourySocketServer (Strategy C). Raw libusb / pyusb writes to
+   `VID:0B05` devices are out of scope for this project. If Strategy C ever
+   fails and we have to drop to USB-level, that decision needs a fresh review
+   and an explicit Vlad sign-off, AND we test on the cheapest device first
+   (Ryujin LCD, replaceable for ~£50 if it dies — board and OLED on the MB
+   are NOT replaceable separately).
+3. **Never swap drivers with Zadig / WinUSB / libusbK.** If we ever need this,
+   it requires a documented uninstall path tested in advance.
+4. **Never modify BIOS, UEFI vars, or run anything that touches `\\.\\` device
+   paths** (raw disk/device handles).
+5. **Never delete files inside `C:\Program Files\ASUS\` or
+   `C:\Program Files (x86)\ASUS\`** without an explicit reason and a backup.
+6. **Don't kill `LightingService.exe` or `ArmourySocketServer.exe` while
+   they're mid-USB-transaction.** The window is small, but a write interrupted
+   mid-frame to firmware-flashable storage on the device is a brick risk.
+   Always wait for an "ok" reply before stopping the daemons.
+
+### Soft rules (best practice)
+
+7. **Backup before mutate.** Before we send our first test XML command that
+   writes anything to a device, copy the four AniMe Matrix `.bin` files
+   (`View\E7C8DA76-...\externalFiles\1-4.bin`) to `scratch/backups/anime/`
+   so we can restore the originals. Same for any other mutable persistent
+   slot we discover. Original Armoury Crate state must always be recoverable
+   in one Vlad-action.
+7b. **Fresh-install fallback documented.** Before doing anything irreversible,
+    confirm Vlad still has Armoury Crate's installer/uninstaller working — if
+    we accidentally corrupt its config, reinstalling Armoury Crate gets us
+    back to a known-good state. (Don't *test* this — just confirm the option
+    exists.)
+8. **Test reads before tests writes.** Always probe a device's state via a
+    pure-read command (e.g. `GetDeviceDescription`) before sending the first
+    write command. If reads work and writes fail, we know the connection is
+    fine and the failure is in our payload — not in our connection logic.
+9. **One unknown at a time.** Don't combine "new XML format" + "new file
+    format" + "new endpoint" in the same test. Change one variable per
+    iteration so a brick (if it happens) is unambiguously attributable.
+10. **For AniMe Matrix specifically:** the first .bin file we generate ourselves
+    must be a passive copy of an existing slot's content (round-trip test)
+    before we try genuinely new content. Confirms our format understanding
+    before we feed the firmware something it's never seen.
+11. **No undocumented commands.** If a JSON reply or JS source mentions a
+    command we haven't seen Armoury Crate use itself, treat it as "do not
+    call." We only use commands we've observed working in captured traffic.
+12. **Keep a tested-good frame on disk at all times.** If something starts
+    looking weird on the LCD, we want to be able to push the known-good frame
+    immediately to recover.
+
+### When in doubt — STOP
+
+If Claude is uncertain whether a command is safe, the answer is don't send it.
+Ask Vlad. The cost of a one-day delay is zero. The cost of a brick is £1400+
+and breaks Vlad's trust in this project, which kills it.
 
 ## 11. Constraints / non-negotiables
 

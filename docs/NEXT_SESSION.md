@@ -44,6 +44,23 @@ Don't redo discovery — it's all in `PROJECT_STATE.md` §6. Go straight to:
 
 If any of those become necessary, ask first and explain why.
 
+## ⚠️ HARDWARE SAFETY — read this before any write command
+
+Read **`docs/PROJECT_STATE.md` §10b — DO NOT BRICK** before sending any command
+that mutates device state. Vlad's motherboard cost £1400. Hard rules:
+
+- No firmware/flash/bootloader endpoints. Ever.
+- No raw USB writes (we're on Strategy C — go through ArmourySocketServer).
+- No driver swaps (Zadig / WinUSB / libusbK).
+- Backup before mutate (especially the 4 AniMe Matrix `.bin` files into
+  `scratch/backups/anime/` before our first .bin write test).
+- Read-probe before write-probe.
+- One unknown at a time.
+- AniMe Matrix first-write must be a round-trip (re-encode an existing slot
+  and verify it's pixel-identical) before genuinely new content.
+
+If uncertain whether a command is safe — **don't send it**, ask Vlad.
+
 ## File map (relevant scratch artifacts)
 
 - `scratch/dump_sdk_exports.py` — dumps DLL exports (already run, output
