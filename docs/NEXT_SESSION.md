@@ -3,6 +3,23 @@
 > Read `PROJECT_STATE.md` first, especially §8 which has the latest protocol
 > map. This file is the action-oriented start guide.
 
+## ⚡ PROOF: replay accepted at wire level
+
+In commit `ad6cbd8` we proved that ArmouryCrate.Service does NOT have
+AES-GCM nonce-replay protection. Captured 48 wire frames during one
+8-second window, replayed them on the same socket, ALL 48 succeeded
+(`ok_count=48 err_count=0`), and matrix visibly changed state
+(green → yellow).
+
+The 48 captured frames were background polls (QuerySMTCInfo /
+QueryNotification — small 13-byte bodies). Replaying them caused a
+state perturbation. The actual SetMatrixLED apply did not fall in our
+8-second capture window — that was the only reason matrix didn't go
+to whatever the captured Apply intended.
+
+This means the FULL wire-replay path WORKS. We just need to capture
+the right Apply burst.
+
 ## Where we stopped (2026-05-09 evening)
 
 We cracked the protocol. The hardware-control channel is **not** the
@@ -20,7 +37,28 @@ fields as `current.json`. Full format documented in `PROJECT_STATE.md` §8.
 DON'T REDO DISCOVERY. The protocol is documented. Open
 `PROJECT_STATE.md` §8 and use it as the spec.
 
-The remaining engineering, in order:
+**Quick win path** (~30 min):
+
+1. Run `scratch/frida_capture_replay_atomic.py 15668`
+2. Vlad clicks Apply with a clearly different color (e.g., bright cyan).
+3. Capture window is 8s — make sure the Apply happens within it. Maybe
+   extend the window to 15s.
+4. Buffer should contain ~14+ frames matching the SetMatrixLED pattern
+   (look for any frame body > 200 bytes — that's a 206-byte payload).
+5. Script auto-replays. Matrix should switch back to that cyan.
+6. If yes — END-TO-END WORKING. Then mutate the captured plaintext
+   to RED and re-replay (we have the Frida-RPC encrypt working from
+   `frida_replay.py`; combine the two).
+
+If the SetMatrixLED frames don't appear on socket 844 during Apply, then
+they go through a DIFFERENT mechanism (likely ArmouryCrate.exe → UserSessionHelper
+via WinRT/COM, then UserSessionHelper relays via TCP). In that case, hook
+BCryptDecrypt instead of send (we already proved that works — it gave us
+the 2986-byte SetMatrixLED plaintext). The plaintext-replay path then is:
+mutate the decrypted plaintext, encrypt with our captured key, send to
+the right outbound socket UserSessionHelper uses.
+
+The remaining engineering after the quick win:
 
 1. **Capture a full Apply session and reassemble fragments.** The current
    capture only got the first 200-byte fragment. Modify
