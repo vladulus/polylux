@@ -1,0 +1,22 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.vscode/
+.idea/
+*.log
+build/
+dist/
+*.egg-info/
+
+# Local research / scratch
+scratch/
+captures/
+*.pcap
+*.pcapng
+
+# Per-machine config
+config.local.yaml
