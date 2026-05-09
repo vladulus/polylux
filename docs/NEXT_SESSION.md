@@ -1,74 +1,110 @@
 # Next session — pick up here
 
-> Read `PROJECT_STATE.md` first. This file is a short, action-oriented start guide.
+> Read `PROJECT_STATE.md` first, especially §8 which has the latest protocol
+> map. This file is the action-oriented start guide.
 
-## Where we stopped
+## Where we stopped (2026-05-09 evening)
 
-Connected from Python to `ws://127.0.0.1:9013` (ArmourySocketServer's plain-WS
-port). Auth-free. Sent a guess at the `ConnectionOpen` XML message — got no
-reply in 6 seconds.
+We cracked the protocol. The hardware-control channel is **not** the
+WebSocket on 9013 (that's keepalive only) but a custom binary length-prefixed
+protocol on **port 50100** between `ArmouryCrate.UserSessionHelper.exe` and
+`ArmouryCrate.Service.exe`, **encrypted via Windows BCrypt** (not OpenSSL,
+not TLS).
 
-## Working theory
-
-Either:
-- **(a)** the XML schema is wrong (server wants different element structure / attributes), or
-- **(b)** port 9013 is alerts-only (server → client) and commands go elsewhere.
-
-We can't tell without **comparing against a real captured message**. That
-requires Vlad to interact with Armoury Crate while we passively listen.
+We hooked `BCryptEncrypt` / `BCryptDecrypt` with Frida and dumped
+plaintext. The Apply command is `Cmd='SetMatrixLED'` carrying the same
+fields as `current.json`. Full format documented in `PROJECT_STATE.md` §8.
 
 ## First action when you resume
 
-Don't redo discovery — it's all in `PROJECT_STATE.md` §6. Go straight to:
+DON'T REDO DISCOVERY. The protocol is documented. Open
+`PROJECT_STATE.md` §8 and use it as the spec.
 
-1. Adapt `scratch/probe_socket.py` into `scratch/listen_only.py`. Connects to
-   `ws://127.0.0.1:9013`, prints every frame received with a timestamp, never
-   sends. Bonus: also open a parallel listener on `ws://127.0.0.1:1042`.
-2. Tell Vlad: "Open Armoury Crate, navigate to the Ryujin LCD page, change a
-   setting (e.g. swap the slideshow image, toggle the temp display). Tell me
-   when done."
-3. Watch the listener output. The XML/JSON pattern that flies past *is* the
-   real protocol. Match it byte-for-byte from Python.
-4. If 9013 stays silent, repeat on 1042 and (with TLS) 9012.
-5. If both are silent, we go to **Plan B**: use `mitmproxy` or a simple
-   `socat`-equivalent in front of port 9013 to MitM Armoury Crate's own
-   WebSocket and see what it actually sends. (See `docs/PLAN_B_MITM.md` —
-   write that doc once you get there.)
+The remaining engineering, in order:
 
-## What Vlad does NOT do unprompted
+1. **Capture a full Apply session and reassemble fragments.** The current
+   capture only got the first 200-byte fragment. Modify
+   `scratch/frida_bcrypt.py` so it accumulates plaintext fragments into a
+   single buffer until it sees a complete message (use the outer 4-byte
+   LE length prefix observed in `frida_winsock.py` to know the total).
+   Save full plaintext to `scratch/captures/setmatrixled_full.bin`.
 
-- Restart Armoury Crate
-- Touch BIOS
-- Install/uninstall ASUS software
-- Edit any file inside `C:\Program Files (x86)\ASUS\`
+2. **Write the binary serializer/deserializer** as
+   `polylux/format/aura_proto.py` matching the type tags table from §8.
+   Round-trip test against the captured plaintext (must produce identical
+   bytes).
 
-If any of those become necessary, ask first and explain why.
+3. **Decide the encrypt path** (one of):
+   - **(a) Frida-as-RPC**: stash `BCRYPT_KEY_HANDLE` on first Encrypt
+     call, expose RPC from Frida JS that takes plaintext, calls
+     `BCryptEncrypt` with that handle, returns ciphertext. Polylux core
+     drives this via `frida.attach`. Pro: works today. Con: Frida is a
+     runtime dep.
+   - **(b) Standalone**: hook `BCryptOpenAlgorithmProvider`,
+     `BCryptGenerateSymmetricKey`, `BCryptSetProperty` to learn cipher
+     suite, key, IV. Replicate from Python with `cryptography` lib.
+     Pro: pure Python, no Frida. Con: more RE work.
+   - Recommendation for v0.1: do (a) first to prove end-to-end works,
+     then promote to (b) for v0.2.
+
+4. **Send-side**: open our own TCP connection to 127.0.0.1:50100. Send
+   `<u32_LE_length><ciphertext>` framed messages. Should get a similar
+   reply we already see in capture (`'result' = 1` or JSON wstring).
+
+5. **Visual confirmation**: send a SetMatrixLED with
+   `TextColorR=255, TextColorG=0, TextColorB=0` and ask Vlad if matrix
+   turns red. That's the end-to-end smoke test.
+
+6. After matrix works → repeat the same playbook for Ryujin LCD
+   (`Cmd='???'` — capture during a Ryujin slideshow change to learn it).
+
+## What Vlad does
+
+- Help with Frida captures: he clicks Apply in Armoury Crate UI, we
+  capture. Same procedure as this session.
+- Visually confirm matrix color changes when we send commands.
+
+## Tooling already installed in venv
+
+- frida + frida-tools 17.9.7 — runtime instrumentation
+- scapy — pcap-style capture (but we don't need it now — Frida is direct)
+- websockets, cryptography, pefile, jsbeautifier, Pillow, psutil, pynvml
+
+npcap loopback adapter is enabled at OS level. No new installs needed
+for next session.
 
 ## ⚠️ HARDWARE SAFETY — read this before any write command
 
 Read **`docs/PROJECT_STATE.md` §10b — DO NOT BRICK** before sending any command
 that mutates device state. Vlad's motherboard cost £1400. Hard rules:
 
-- No firmware/flash/bootloader endpoints. Ever.
-- No raw USB writes (we're on Strategy C — go through ArmourySocketServer).
-- No driver swaps (Zadig / WinUSB / libusbK).
-- Backup before mutate (especially the 4 AniMe Matrix `.bin` files into
-  `scratch/backups/anime/` before our first .bin write test).
-- Read-probe before write-probe.
-- One unknown at a time.
-- AniMe Matrix first-write must be a round-trip (re-encode an existing slot
-  and verify it's pixel-identical) before genuinely new content.
+- No firmware/flash/bootloader endpoints. Ever. (Cmd names like
+  `*Update*`, `*Flash*`, `*FW*`, `*Boot*` — STOP, ask Vlad first.)
+- No raw USB writes (we're going through ASUS services on 50100).
+- Backup before mutate (still have backups in scratch/backups/).
+- Read-probe before write-probe (send a `Query*` Cmd before any
+  `Set*` Cmd, see that we get a reply).
+- AniMe Matrix first-write: send `SetMatrixLED` with literally the
+  same params as Vlad's last Apply (round-trip), confirm no visual
+  change, before changing anything.
 
 If uncertain whether a command is safe — **don't send it**, ask Vlad.
 
-## File map (relevant scratch artifacts)
+## Reference scripts to keep / reuse
 
-- `scratch/dump_sdk_exports.py` — dumps DLL exports (already run, output
-  documented in PROJECT_STATE.md §6).
-- `scratch/aio_index_beautified.js` — UI module, ~7 000 lines (Express
-  routes / file ops).
-- `scratch/aio_service_beautified.js` — service module, ~13 000 lines
-  (WebSocket connections, sendSocketServer, sessionKey).
-- `scratch/motherboard_index_beautified.js` — analogous module for MB.
-- `scratch/probe_socket.py` — first attempt to talk to 9013. Got no reply.
-  Adapt before next attempt.
+- `scratch/frida_bcrypt.py` — the breakthrough hook. Keep, extend.
+- `scratch/extract_setmatrixled.py` — offline plaintext decoder. Will
+  evolve into `polylux/format/aura_proto.py`.
+- `scratch/frida_list_modules.py` — handy when re-attaching.
+- `scratch/frida_winsock.py` — confirms which socket carries the data.
+- `scratch/capture_loopback.py` — only needed if revisiting the
+  TCP-stream side. Frida is faster.
+
+## Reference paths
+
+- Project root: `C:\Users\vlad\Desktop\Polylux`
+- BCrypt capture: `scratch/captures/bcrypt_session_full.txt`
+- Plaintext sample: `scratch/captures/setmatrixled_plaintext.bin`
+- Beautified JS: `scratch/aio_*_beautified.js`,
+  `scratch/motherboard_index_beautified.js`
+- AMMX backups: `scratch/backups/anime/{1,2,3,4}.bin`

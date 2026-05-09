@@ -263,24 +263,119 @@ ready-made examples to compare formats across.
 For a 1 Hz digital clock we don't even need 4 slots — we can rewrite a single
 .bin file once per second and tell ArmourySocketServer to play that slot.
 
-## 8. Current obstacle
+## 8. Current obstacle and protocol findings (UPDATED 2026-05-09 evening)
 
-Connecting to `ws://127.0.0.1:9013` from Python works (no auth, plain WS
-handshake succeeds). Sending the obvious `<root><command>ConnectionOpen</command>
-<device>{modelNumber}</device></root>` produces **no reply** within 6 seconds.
+The earlier dead-end on ws://127.0.0.1:9013 turned out to be misdirected:
+**that channel is keepalives only**. The real hardware-control channel runs
+elsewhere. Full breakthrough captured in this session — see commit 985628e
+and `scratch/captures/bcrypt_session_full.txt`.
 
-Hypotheses, in order of likelihood:
+### The real path
 
-1. **XML schema is wrong** — server may want `<device_type>` wrapper, attributes
-   instead of nested elements, namespaces, etc. Need to capture an actual
-   working message between Armoury Crate UI and ArmourySocketServer to compare.
-2. **Ports are reversed in my model** — `mn = ln.alertSocketServer = ws://127.0.0.1:9013`
-   *was* in service.js, but `alertSocketServer` could mean "the server pushes
-   alerts to me" (server → client only), not "I send commands here." The actual
-   command port might be 9012 (TLS, needs cert) or even just back through
-   port 1042. **Need to verify.**
-3. **Subprotocol / Origin mismatch** — Python sets `Origin: http://127.0.0.1:1042`
-   but server may require a specific WebSocket subprotocol header.
+UWP `ArmouryCrate.exe` UI delegates to `ArmouryCrate.UserSessionHelper.exe`
+(per-user, PID 15668 when running). That helper opens a **plain TCP socket
+to `127.0.0.1:50100`** where `ArmouryCrate.Service.exe` listens. The
+`ArmourySocketServer.exe` on 9012/9013 is a separate (mostly idle) channel
+for telemetry / status sync.
+
+### Wire format on 50100
+
+```
+[length: u32 LE]   then exactly that many bytes of [encrypted payload]
+```
+
+So a complete packet from UserSessionHelper might look like (hex):
+
+```
+2c 00 00 00      <- length = 44
+b8 66 f3 12 ... <- 44 bytes of ciphertext
+```
+
+Frames seen during one matrix Apply:
+
+```
+2c 00 00 00 + 44 bytes        ?
+20 00 00 00 + 32 bytes        keepalive header?
+d3 00 00 00 + 211 bytes       ?
+20 00 00 00 + 32 bytes
+38 00 00 00 + 56 bytes
+20 00 00 00 + 32 bytes
+3f 00 00 00 + 63 bytes
+... (then SetMatrixLED follows in larger frames)
+```
+
+### Encryption
+
+**Not TLS / not OpenSSL.** UserSessionHelper has libssl loaded but does NOT
+use it for this connection (SSL_write hooks fired zero times during Apply).
+Encryption goes through **Windows BCrypt API** — `bcrypt.dll!BCryptEncrypt`
+and `BCryptDecrypt`. Cipher type and key are still TBD; what we have is:
+
+- BCryptEncrypt is called per fragment, plaintext available pre-encrypt.
+- BCryptDecrypt is called per fragment, plaintext available post-decrypt.
+- Frida hooks on these APIs give us live decrypted data without keys.
+
+### Plaintext serialization format
+
+Custom name-prefixed binary serialization (looks like a dialect of MS RPC
+NDR or a homegrown variant):
+
+```
+field := name_len:u8  name:ascii[name_len]
+         type_tag:u8  payload_len:u32-le  payload:bytes[payload_len]
+```
+
+Type tags observed:
+
+| tag  | meaning | example |
+|------|---------|---------|
+| 0x02 | u32     | `02 04 00 00 00 01 00 00 00`  → uint32 = 1 |
+| 0x04 | raw bytes (e.g. GUID) | `04 10 00 00 00 8e 87 d2 6a 59 6f 34 4f be e4 3f 5a 99 4a 00 6d` |
+| 0x05 | u32 enum/flag | `05 04 00 00 00 80 00 00 00`  → 0x80 |
+| 0x10 | UTF-16 LE wstring | `10 18 00 00 00 53 00 65 00 74 00 4d 00 61 00 74 00 72 00 69 00 78 00 4c 00 45 00 44 00`  → "SetMatrixLED" |
+| 0x20 | nested struct | `20 3f 00 00 00 ...nested fields...` |
+
+### The Apply command
+
+`Cmd='SetMatrixLED'` carries the same field set we saw in `current.json`:
+`AlarmChecked`, `CalendarChecked`, `ClockChecked`, `DateChecked`,
+`Delay[0]`, `Duration[0]`, `LayerCount`, `LayerName[0]`, `Layer[0]`,
+`Trigger[0]`, `TextColorR/G/B[0]`, `TextColorMode[0]`,
+`TextColorPatternIndex[0]`, `TextColorSpeed[0]`, plus the m_device*
+metadata. Full plaintext sample (200 bytes, first fragment) saved at
+`scratch/captures/setmatrixled_plaintext.bin`. Decoded by
+`scratch/extract_setmatrixled.py`.
+
+Other commands seen in capture: `QuerySMTCInfo` (Windows media transport
+controls), `QueryNotification`. These are background polls; can be ignored.
+
+The plaintext envelope also carries:
+- `Area` (uint32, observed = 2)
+- `Feature` (uint32, observed = 1)
+- `Name` = "AuraPlugin" (UTF-16)
+- `Number` = GUID `8e87d26a-596f-344f-bee4-3f5a994a006d` (this is the
+  AuraPlugin identifier — same on every Z690 Maximus Extreme on this
+  Armoury Crate version)
+- `Security` (uint32, observed = 0x80)
+- `Version` struct with Major/Minor/Build/Revision
+
+### What still blocks end-to-end Polylux→hardware replay
+
+1. **Reassemble the full SetMatrixLED message.** BCryptDecrypt fires per
+   AES block / fragment; one Apply emits ~10–20 fragments that need to be
+   stitched into one logical message. Easy work, just bookkeeping.
+2. **Extract the BCRYPT_KEY_HANDLE used.** We hooked `BCryptEncrypt` and
+   saw plaintext + the key handle as args[0]. We need to either:
+   (a) stash that handle from a hook callback, then call
+       `BCryptEncrypt` from inside Frida with our own plaintext, or
+   (b) reverse the key derivation: read `BCryptOpenAlgorithmProvider`,
+       `BCryptGenerateSymmetricKey`, etc. to learn the cipher + key.
+3. **Write the binary serializer in Python** for our own messages.
+4. **Send via socket on 50100** (or hijack the existing connection from
+   inside Frida — even simpler).
+
+Approach (b) gives us a fully standalone Polylux. Approach (a) requires
+Frida always running. Either way: this is the next session's work.
 
 ## 9. Next concrete steps (start here next session)
 
