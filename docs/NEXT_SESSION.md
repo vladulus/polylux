@@ -37,26 +37,43 @@ fields as `current.json`. Full format documented in `PROJECT_STATE.md` §8.
 DON'T REDO DISCOVERY. The protocol is documented. Open
 `PROJECT_STATE.md` §8 and use it as the spec.
 
-**Quick win path** (~30 min):
+**Confirmed reality (verified 2026-05-09 evening, commits 0fe7688 / smart_replay):**
 
-1. Run `scratch/frida_capture_replay_atomic.py 15668`
-2. Vlad clicks Apply with a clearly different color (e.g., bright cyan).
-3. Capture window is 8s — make sure the Apply happens within it. Maybe
-   extend the window to 15s.
-4. Buffer should contain ~14+ frames matching the SetMatrixLED pattern
-   (look for any frame body > 200 bytes — that's a 206-byte payload).
-5. Script auto-replays. Matrix should switch back to that cyan.
-6. If yes — END-TO-END WORKING. Then mutate the captured plaintext
-   to RED and re-replay (we have the Frida-RPC encrypt working from
-   `frida_replay.py`; combine the two).
+- Hooks on `send()` and `BCryptEncrypt` from inside UserSessionHelper see
+  only background poll traffic during a matrix Apply (44-byte max bodies,
+  QuerySMTCInfo and QueryNotification). They do NOT see the SetMatrixLED.
+- Hook on `BCryptDecrypt` sees the FULL 2986-byte SetMatrixLED plaintext
+  arriving (we captured it earlier).
+- Conclusion: ArmouryCrate.exe (UWP UI, PID 37048) sends SetMatrixLED to
+  UserSessionHelper via UserSessionHelper's listening port `51100`,
+  encrypted. UserSessionHelper decrypts (BCryptDecrypt fires) and applies.
 
-If the SetMatrixLED frames don't appear on socket 844 during Apply, then
-they go through a DIFFERENT mechanism (likely ArmouryCrate.exe → UserSessionHelper
-via WinRT/COM, then UserSessionHelper relays via TCP). In that case, hook
-BCryptDecrypt instead of send (we already proved that works — it gave us
-the 2986-byte SetMatrixLED plaintext). The plaintext-replay path then is:
-mutate the decrypted plaintext, encrypt with our captured key, send to
-the right outbound socket UserSessionHelper uses.
+**Quick win path** for next session (~30-60 min):
+
+1. Hook `recv()` / `WSARecv()` in UserSessionHelper (PID 15668) to capture
+   the INBOUND ciphertext on port 51100 — alongside the existing
+   BCryptDecrypt hook. Match the wire bytes that arrived to the plaintext
+   that BCryptDecrypt produced. Save the wire ciphertext for that one
+   specific Apply burst.
+2. Open our own TCP connection to `127.0.0.1:51100` from Python.
+3. Send the captured inbound bytes verbatim. UserSessionHelper should
+   decrypt and process them as if they came from ArmouryCrate.exe.
+4. Matrix should change to whatever Vlad's Apply set during capture.
+5. If yes — END-TO-END WORKING. Then mutate plaintext, re-encrypt
+   (we have the Frida-RPC encrypt path proven; key may be shared between
+   inbound and outbound or may be different — check by encrypting our
+   payload and comparing tag length / cipher to a captured one).
+6. If sending bytes to 51100 from Python fails because the server expects
+   a TLS handshake or session-key establishment first, then we have to
+   replicate that. Look for the handshake bytes in the capture before the
+   first SetMatrixLED frame — those are the session setup.
+
+If 51100 has a per-connection session key and won't talk to a fresh client
+without ArmouryCrate.exe-style auth, fallback: hijack the existing
+ArmouryCrate.exe → UserSessionHelper connection by writing into THAT
+socket from inside Frida (which is attached to UserSessionHelper, so we
+can call `send()` on the socket the kernel knows is paired with the
+already-authenticated peer).
 
 The remaining engineering after the quick win:
 
