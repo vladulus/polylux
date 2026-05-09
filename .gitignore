@@ -12,11 +12,17 @@ build/
 dist/
 *.egg-info/
 
-# Local research / scratch
-scratch/
-captures/
-*.pcap
-*.pcapng
+# Inside scratch/, keep .py / .js / .md / .txt (research notes); ignore everything else.
+scratch/captures/
+scratch/*.pcap
+scratch/*.pcapng
+scratch/*.bin
+scratch/*.gif
+scratch/*.jpg
+scratch/*.jpeg
+scratch/*.png
+scratch/*.avi
+scratch/*.mp4
 
 # Per-machine config
 config.local.yaml
