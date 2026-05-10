@@ -63,6 +63,14 @@
 6. **README rewrite** for v0.4 public launch — "what works,
    installation, OpenRGB dependency, donate".
 
+7. **Italic 3x5 font for clock** — Vlad noticed that the current
+   upright 3x5 font, when drawn at rotation=270 to fit "12:34" along
+   the matrix's long axis, looks blocky. An italic / slanted version
+   would read better visually. Add font_3x5_italic.py with the same
+   glyph table but slanted (e.g. shift the top row right by 1 px,
+   bottom row unchanged), and a `font` parameter on
+   `Frame.draw_tiny_text()` to choose between roman / italic.
+
 ## What Vlad does
 
   - Brings up AC and clicks Apply on the specific feature being
