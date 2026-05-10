@@ -61,6 +61,20 @@ PID = 0x1A21
 FRAME_SIZE = 768
 HID_PREP = bytes([0xEC, 0x7F, 0x04, 0x00, 0x03]) + b"\x00" * 60   # 65 bytes
 
+# Init sequence captured from AC startup (matrix_p1.pcap, dev 7, t=0..1.7s+83.3s).
+# Without these the chip ignores frame writes silently — found by Vlad after
+# AC was uninstalled and matrix went dark despite USB writes succeeding.
+HID_HEARTBEAT  = bytes([0xEC, 0xDC, 0x00]) + b"\x00" * 62          # x3 at startup
+HID_CONTROL_82 = bytes([0xEC, 0x82, 0x00]) + b"\x00" * 62          # x1 after heartbeats
+HID_ENABLE_42  = bytes([0xEC, 0x42, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]) + b"\x00" * 57
+# ^^^ THIS is the magic "enable matrix display mode" command. Once-per-session,
+#     before the first frame. Without it the chip ignores ec 7f + bulk writes.
+
+# Companion prep packet sent before every matrix frame. AC always pairs
+# ec c1 + ec 7f. We were skipping ec c1 before discovering the init sequence —
+# it now appears to be required after a fresh init.
+HID_PREP_C1    = bytes([0xEC, 0xC1, 0x00]) + b"\x00" * 62
+
 BULK_INTERFACE = 0       # mi_00, vendor specific
 BULK_EP_OUT    = 0x01
 
@@ -130,7 +144,33 @@ class AniMeMatrix:
             usb.util.release_interface(usb_dev, BULK_INTERFACE)
             raise AniMeMatrixError(f"failed to open HID interface: {ex}") from ex
 
-        return cls(_usb_dev=usb_dev, _hid_dev=hid_dev, _frame=bytearray(FRAME_SIZE))
+        instance = cls(_usb_dev=usb_dev, _hid_dev=hid_dev, _frame=bytearray(FRAME_SIZE))
+        # Send the init sequence so the chip accepts subsequent frame writes
+        # even after AC has never run / is uninstalled / matrix is in cold state.
+        # Empirically validated 2026-05-11 — without this the matrix is silent.
+        instance._init_chip()
+        return instance
+
+    def _init_chip(self) -> None:
+        """Wake up the matrix chip with the AC-discovered init sequence.
+
+        Idempotent — if the chip is already initialized (AC ran earlier in
+        this boot session), re-sending these commands has no effect on
+        display state.
+        """
+        import time
+        # 3 heartbeats at 500ms intervals (AC sends these on startup).
+        for _ in range(3):
+            self._hid_dev.write(HID_HEARTBEAT)
+            time.sleep(0.05)
+        # Control packet 0x82 (purpose unknown but always present in init).
+        self._hid_dev.write(HID_CONTROL_82)
+        time.sleep(0.05)
+        # Enable matrix display mode — the magic command. Pair with ec c1
+        # like AC does.
+        self._hid_dev.write(HID_PREP_C1)
+        self._hid_dev.write(HID_ENABLE_42)
+        time.sleep(0.05)
 
     def close(self) -> None:
         """Release both interfaces. Idempotent."""
@@ -197,19 +237,24 @@ class AniMeMatrix:
     def send_frame(self, buf: bytes) -> None:
         """Push an arbitrary 768-byte frame buffer to the device.
 
-        Writes:
-          1. HID prep packet (INT OUT 65B) — required for the bulk write
-             that follows to take effect.
-          2. Bulk frame (BULK OUT 768B) — pixel data.
+        Writes (matching the per-frame sequence AC uses, observed in
+        matrix_p1.pcap):
+          1. HID companion prep ec c1 00 — paired with ec 7f at every frame.
+          2. HID prep packet ec 7f 04 00 03 — frame begin signal.
+          3. Bulk frame (BULK OUT 768B) — pixel data.
         """
         if len(buf) != FRAME_SIZE:
             raise ValueError(f"frame must be {FRAME_SIZE}B, got {len(buf)}")
         if self._usb_dev is None or self._hid_dev is None:
             raise AniMeMatrixError("matrix not open")
 
+        n = self._hid_dev.write(HID_PREP_C1)
+        if n < 0:
+            raise AniMeMatrixError(f"HID ec c1 prep write failed: {self._hid_dev.error()}")
+
         n = self._hid_dev.write(HID_PREP)
         if n < 0:
-            raise AniMeMatrixError(f"HID prep write failed: {self._hid_dev.error()}")
+            raise AniMeMatrixError(f"HID ec 7f prep write failed: {self._hid_dev.error()}")
 
         n = self._usb_dev.write(BULK_EP_OUT, bytes(buf), timeout=2000)
         if n != FRAME_SIZE:
