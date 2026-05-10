@@ -1,7 +1,68 @@
 # Next session — pick up here
 
-> Read `PROJECT_STATE.md` first, especially §8 which has the latest protocol
-> map. This file is the action-oriented start guide.
+> Read `PROJECT_STATE.md` **§8e first** for the latest state: AniMe Matrix
+> is fully mapped (LUT + render), and v0.2 scope was corrected to include
+> OLED + LCD + RGB (not matrix alone).
+
+## TL;DR
+
+  - **AniMe Matrix:** DONE. LUT verified empirically with Vlad (222 LEDs,
+    36×7 portrait layout, 16-block storage, special block-15 alignment).
+    Render primitives ship: set_pixel, set_row, set_col, fill, clear,
+    draw_text (PIL font), draw_tiny_text (3×5 pixel font), draw_image,
+    rotation parameter for portrait/landscape text orientation.
+  - **OLED next.** Same chip (PID 1A21), same USB interfaces — just a
+    different HID command prefix. Workflow: USBPcap on iface 1 ep 0x02
+    while Vlad does Apply in AC OLED settings, diff the prefix vs
+    matrix's [0xEC, 0x7F, 0x04, 0x00, 0x03], implement driver.
+  - **LCD after that.** Different chip (PID 1988), separate capture +
+    decode workflow, full 320×240 image upload.
+  - **RGB after that.** Bundle OpenRGB as dependency, no protocol RE.
+  - **Then service infra + installer + ship v0.2.**
+
+## What to verify still works on resume
+
+```python
+from polylux.drivers.anime_matrix.usb_direct import AniMeMatrix
+from polylux.drivers.anime_matrix.render import Frame
+
+with AniMeMatrix.open() as m:
+    f = Frame()
+    f.draw_tiny_text("12:34", color=(0xFF, 0xFF, 0xFF), rotation=270)
+    m.send_frame(f.to_bytes())
+```
+
+Should show the time on the matrix. If matrix is locked by ASUS daemons,
+kill them first via PowerShell admin:
+
+```
+Get-Process | Where-Object { $_.ProcessName -match
+  'Aac3572|LightingService|ArmouryCrate|asus_framework|ArmourySocketServer|ArmourySwAgent'
+} | Stop-Process -Force
+```
+
+## OLED capture setup (next session work)
+
+1. Vlad re-enables AC (Services.msc → start LightingService + ArmouryCrate
+   services). Verify AC UI opens and OLED page works.
+2. Install USBPcap if not already (https://desowin.org/usbpcap/).
+3. Identify the USB bus the PID 1A21 device is on (USBPcap install lists
+   them).
+4. Filter capture to that device only — minimizes noise.
+5. In AC, navigate to OLED page, change some setting (image, animation,
+   text), click Apply.
+6. Save .pcap to `scratch/captures/oled_apply.pcap`.
+7. Open in Wireshark, filter on bulk OUT to iface 0 ep 0x01 + interrupt
+   OUT to iface 1 ep 0x02. Compare HID prep bytes vs matrix:
+   - Matrix HID prep: `[0xEC, 0x7F, 0x04, 0x00, 0x03] + 60 zeros`
+   - OLED HID prep:   `[0xEC, 0x7F, ?, ?, ?] + ...`  (likely byte 2 or 4 differs)
+
+This is the same workflow that cracked the matrix protocol in §8d.
+
+(Old content below this line predates the matrix completion — kept for
+reference but most of it is superseded.)
+
+---
 
 ## ⚠️ CRITICAL CAPTURE GOTCHA (added 2026-05-10 morning, parallel session learning)
 

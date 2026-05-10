@@ -1,6 +1,6 @@
 # Polylux — Project State
 
-**Last updated:** 2026-05-10 (afternoon — see §8b for v0.2 progress)
+**Last updated:** 2026-05-10 (late evening — see §8e for matrix LUT completion + scope revision)
 
 This document is the single source of truth for project state across sessions.
 Anyone (Claude or human) starting a new session should read this **first**, then
@@ -380,7 +380,104 @@ The plaintext envelope also carries:
 Approach (b) gives us a fully standalone Polylux. Approach (a) requires
 Frida always running. Either way: this is the next session's work.
 
-## 8d. v0.2 BREAKTHROUGH — direct USB control of AniMe Matrix (2026-05-10 evening)
+## 8e. AniMe Matrix LUT FULLY MAPPED + scope correction (2026-05-10 late evening)
+
+**Matrix work is now functionally complete.** The 768-byte storage layout
+has been derived empirically with Vlad's manual count and 10+ pinned
+R-byte verifications. Render primitives (set_pixel / draw_text / draw_image
+plus a 3×5 hardcoded font for clock-sized text) ship in
+`polylux/drivers/anime_matrix/`.
+
+### Physical topology (verified by per-column LED count)
+
+  Top staircase:    rows 1..3  with 2, 4, 6 LEDs (left-anchored, cols 1..N)
+  Middle:           rows 4..29 with 7 LEDs each (full width, 26 rows)
+  Bottom staircase: rows 30..36 narrowing 7, 6, 5, 4, 3, 2, 1 (left-anchored)
+
+  Total: 12 + 182 + 28 = 222 active LEDs
+
+  Per-column LED count (Vlad's manual count):
+    col 1 = 36, col 2 = 35, col 3 = 33, col 4 = 32,
+    col 5 = 30, col 6 = 29, col 7 = 27.  Sum = 222.
+
+### Storage layout (768 bytes = 16 blocks × 48 bytes)
+
+  Each block has 3 planes (R, G, B) of 16 bytes each. For an LED at
+  R-byte offset n: G-byte = n+16, B-byte = n+32 (within same block).
+
+  Block 0: 15 active LEDs + 1 padding (slot 15)
+    - rows 1, 2, 3 (top staircase, 12 LEDs)
+    - row 4 cols 1..3 (first 3 of middle, 3 LEDs)
+
+  Blocks 1..14: each has 14 active LEDs + 2 padding (slots 14, 15)
+    - Cover middle rows 4 cols 4..7 through row 32 cols 1..4
+      in raster row-major order, 14 LEDs per block.
+
+  Block 15: 11 active LEDs at specific slot positions + 5 padding
+    - Active slots: 0, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12
+    - Padding slots: 1, 9, 13, 14, 15
+    - Each row segment is aligned to 2 slots (1 byte of padding after
+      odd-LED row segments) — special handling vs blocks 0..14.
+
+### Empirically pinned (col, row at R-byte)
+
+  byte   0 = (1, 1)        byte 676 = (1, 31)
+  byte 720 = (5, 32)       byte 722 = (1, 33)
+  byte 725 = (4, 33)       byte 726 = (1, 34)
+  byte 727 = (2, 34)       byte 728 = (3, 34)
+  byte 729 = PAD           byte 730 = (1, 35)
+  byte 732 = (1, 36)       byte 734 = PAD
+
+  Plus RGB plane mapping verified by cycling whole matrix through 8
+  colors (R, O, Y, G, C, B, V, W) — Vlad confirmed all 8 distinct.
+
+### What ships in this session
+
+  - `polylux/drivers/anime_matrix/lut.py` — verified LUT + public API
+    (r_byte, g_byte, b_byte, rgb_bytes, has_led, coord_at_r_byte)
+  - `polylux/drivers/anime_matrix/render.py` — Frame class with set_pixel,
+    set_row, set_col, fill, clear, draw_text (PIL font), draw_tiny_text
+    (3×5 hardcoded font), draw_image, rotation parameter
+  - `polylux/drivers/anime_matrix/font_3x5.py` — pixel font for digits,
+    ':', '.', ' ', '-', 'C', 'F', '%'
+
+### Known dead pixels on Vlad's board
+
+  ~4 LEDs have a dead B channel (visible as yellow when commanded white).
+  These are HARDWARE defects pre-existing on his board, not protocol
+  errors. Render primitives don't try to compensate.
+
+### v0.2 SCOPE CORRECTION (Vlad's reminder)
+
+Earlier "v0.2 SHIPS" tags (commits 04d0bcc / 5e62a14) labeled the matrix
+work as v0.2. Vlad pushed back: that's incomplete for a real Armoury
+Crate replacement — a user who uninstalls AC would still have the
+Ryujin LCD black, RGB controls dead, OLED unused.
+
+**Revised v0.2 scope** = all 4 motherboard / AIO outputs:
+  1. AniMe Matrix — ✅ DONE this session
+  2. LiveDash OLED — same chip (PID 1A21), shares the 2 USB interfaces;
+     HID command prefix differs (must be discovered via USBPcap of an
+     AC OLED Apply session).
+  3. Ryujin II LCD — separate chip (PID 1988), 320×240 image upload.
+     Workflow same as matrix: capture → decode → driver.
+  4. Aura RGB — bundle OpenRGB as internal dependency. OpenRGB is MIT,
+     mature, already supports Z690 Maximus Extreme + RAM + GPU + AIO.
+     RGB isn't our moat (the displays are) — don't reinvent.
+
+Plus `kill_asus_stack()` helper, scene-based YAML config, Windows
+service installer with auto-start.
+
+### Next session
+
+  Start with OLED. Vlad needs to: re-enable AC, install USBPcap, run a
+  capture while clicking Apply on OLED settings. Then decode the HID
+  prefix difference vs matrix and implement the driver. Estimated 1-2
+  sessions for OLED, similar each for LCD and the RGB+OpenRGB wiring,
+  plus 1 for service infrastructure and installer. **Target v0.2 ship:
+  this week.**
+
+## 8d. v0.2 (prior) BREAKTHROUGH — direct USB control of AniMe Matrix (2026-05-10 evening)
 
 **The wall in §8c (peer check on UWP / Helper / Service) was bypassed by
 attacking the chip directly via USB**, per Vlad's pivot ("dacă nu scăpăm

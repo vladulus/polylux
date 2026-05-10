@@ -1,0 +1,316 @@
+"""Render primitives for the AniMe Matrix.
+
+Provides a Frame class — a working 768-byte buffer + (col, row, rgb) API —
+and high-level operations like draw_text and draw_image that compose
+content on top of the LED grid.
+
+Usage::
+
+    from polylux.drivers.anime_matrix.usb_direct import AniMeMatrix
+    from polylux.drivers.anime_matrix.render import Frame
+
+    f = Frame()
+    f.set_pixel(1, 1, (0xFF, 0, 0))            # top-left red
+    f.fill((0, 0xFF, 0))                       # whole matrix green
+    f.draw_text("12:34", font, color=(0xFF, 0xFF, 0xFF))
+
+    with AniMeMatrix.open() as m:
+        m.send_frame(f.to_bytes())
+"""
+from __future__ import annotations
+
+from typing import Iterable, Optional, Sequence, Tuple
+
+from . import lut
+from . import font_3x5
+
+
+RGB = Tuple[int, int, int]
+BLACK: RGB = (0, 0, 0)
+WHITE: RGB = (0xFF, 0xFF, 0xFF)
+
+
+class Frame:
+    """A 768-byte working frame buffer indexed by (col, row).
+
+    Padding bytes are written too (always 0) — the firmware ignores them.
+    """
+
+    __slots__ = ("_buf",)
+
+    def __init__(self, initial: Optional[bytes] = None) -> None:
+        if initial is None:
+            self._buf = bytearray(lut.TOTAL_BYTES)
+        else:
+            if len(initial) != lut.TOTAL_BYTES:
+                raise ValueError(
+                    f"initial buffer must be {lut.TOTAL_BYTES} bytes, got {len(initial)}"
+                )
+            self._buf = bytearray(initial)
+
+    # -- low-level access --
+
+    def to_bytes(self) -> bytes:
+        return bytes(self._buf)
+
+    def __bytes__(self) -> bytes:
+        return self.to_bytes()
+
+    # -- whole-frame ops --
+
+    def clear(self) -> None:
+        for i in range(lut.TOTAL_BYTES):
+            self._buf[i] = 0
+
+    def fill(self, color: RGB) -> None:
+        r, g, b = _clip_rgb(color)
+        for c, row in lut.ALL_COORDS:
+            self._set_rgb(c, row, r, g, b)
+
+    # -- pixel ops --
+
+    def set_pixel(self, col: int, row: int, color: RGB) -> None:
+        if not lut.has_led(col, row):
+            return
+        r, g, b = _clip_rgb(color)
+        self._set_rgb(col, row, r, g, b)
+
+    def get_pixel(self, col: int, row: int) -> RGB:
+        if not lut.has_led(col, row):
+            return BLACK
+        rb, gb, bb = lut.rgb_bytes(col, row)
+        return (self._buf[rb], self._buf[gb], self._buf[bb])
+
+    def _set_rgb(self, col: int, row: int, r: int, g: int, b: int) -> None:
+        rb, gb, bb = lut.rgb_bytes(col, row)
+        self._buf[rb] = r
+        self._buf[gb] = g
+        self._buf[bb] = b
+
+    # -- row/col helpers --
+
+    def set_row(self, row: int, color: RGB) -> None:
+        if row not in lut.COLS_PER_ROW:
+            return
+        r, g, b = _clip_rgb(color)
+        for c in lut.COLS_PER_ROW[row]:
+            self._set_rgb(c, row, r, g, b)
+
+    def set_col(self, col: int, color: RGB) -> None:
+        r, g, b = _clip_rgb(color)
+        for c, row in lut.ALL_COORDS:
+            if c == col:
+                self._set_rgb(c, row, r, g, b)
+
+    # -- image rendering --
+
+    def draw_image(
+        self,
+        image: "PIL.Image.Image",  # type: ignore[name-defined]
+        *,
+        invert_y: bool = False,
+    ) -> None:
+        """Sample a PIL image into the LED grid.
+
+        The image is expected to be in RGB mode and roughly portrait
+        (cols=7 wide × rows=36 tall). It's resized to (7, 36) via nearest
+        neighbour, then each LED at (col, row) reads the pixel at
+        (col - 1, row - 1) of the resized image.
+
+        Args:
+          image:      PIL.Image in any mode (converted to RGB).
+          invert_y:   If True, flip the image vertically (useful when the
+                      matrix is physically mounted upside down).
+        """
+        try:
+            from PIL import Image  # type: ignore
+        except ImportError as ex:
+            raise RuntimeError("Pillow is required for draw_image") from ex
+
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        if invert_y:
+            image = image.transpose(Image.FLIP_TOP_BOTTOM)
+
+        resized = image.resize((lut.MAX_COL, lut.MAX_ROW), resample=Image.NEAREST)
+        px = resized.load()
+        for col, row in lut.ALL_COORDS:
+            r, g, b = px[col - 1, row - 1]
+            self._set_rgb(col, row, r, g, b)
+
+    def draw_text(
+        self,
+        text: str,
+        *,
+        color: RGB = WHITE,
+        font: Optional["PIL.ImageFont.ImageFont"] = None,  # type: ignore[name-defined]
+        center: bool = True,
+        rotation: int = 0,
+    ) -> None:
+        """Render `text` onto the matrix using a PIL font.
+
+        rotation:
+          0   — text drawn natively (rows are matrix rows, cols are matrix cols).
+                Best for single characters or short labels (matrix is only 7 cols
+                wide, so longer strings won't fit horizontally).
+          90  — text drawn rotated 90° clockwise, so the writing direction runs
+                along the LONG axis of the matrix (36 LEDs tall). Best for the
+                clock / temperature where you want to read along the long axis.
+                User reads with the matrix orientation as-is — head tilted right.
+          180 — text drawn upside down.
+          270 — text rotated 90° counter-clockwise (head tilted left).
+
+        The text is drawn onto an off-screen monochrome canvas (matched in size
+        to the final orientation), centred if requested, then projected onto
+        lit LEDs. Background pixels are left untouched.
+        """
+        try:
+            from PIL import Image, ImageDraw, ImageFont  # type: ignore
+        except ImportError as ex:
+            raise RuntimeError("Pillow is required for draw_text") from ex
+
+        if rotation not in (0, 90, 180, 270):
+            raise ValueError(f"rotation must be 0, 90, 180, or 270; got {rotation}")
+        if font is None:
+            font = ImageFont.load_default()
+
+        # Canvas dimensions before final rotation. For rotation=0/180 we draw
+        # at portrait dimensions (col × row); for rotation=90/270 we draw at
+        # landscape dimensions (row × col) so the text fits horizontally
+        # before being rotated back into the portrait LED grid.
+        if rotation in (90, 270):
+            canvas_w, canvas_h = lut.MAX_ROW, lut.MAX_COL          # 36 × 7
+        else:
+            canvas_w, canvas_h = lut.MAX_COL, lut.MAX_ROW          # 7 × 36
+
+        canvas = Image.new("L", (canvas_w, canvas_h), 0)
+        draw = ImageDraw.Draw(canvas)
+        bbox = draw.textbbox((0, 0), text, font=font)
+        text_w = bbox[2] - bbox[0]
+        text_h = bbox[3] - bbox[1]
+        if center:
+            x = (canvas_w - text_w) // 2 - bbox[0]
+            y = (canvas_h - text_h) // 2 - bbox[1]
+        else:
+            x, y = -bbox[0], -bbox[1]
+        draw.text((x, y), text, fill=255, font=font)
+
+        # Rotate the canvas so its final dimensions are MAX_COL × MAX_ROW
+        # (portrait, matching the LED grid orientation).
+        if rotation == 90:
+            canvas = canvas.transpose(Image.ROTATE_270)   # PIL: ROTATE_270 = 90° CW
+        elif rotation == 180:
+            canvas = canvas.transpose(Image.ROTATE_180)
+        elif rotation == 270:
+            canvas = canvas.transpose(Image.ROTATE_90)    # PIL: ROTATE_90 = 90° CCW
+
+        assert canvas.size == (lut.MAX_COL, lut.MAX_ROW), (
+            f"canvas size after rotation {canvas.size} != "
+            f"({lut.MAX_COL}, {lut.MAX_ROW})"
+        )
+
+        px = canvas.load()
+        r_v, g_v, b_v = _clip_rgb(color)
+        for col, row in lut.ALL_COORDS:
+            if px[col - 1, row - 1] > 127:
+                self._set_rgb(col, row, r_v, g_v, b_v)
+
+    def draw_tiny_text(
+        self,
+        text: str,
+        *,
+        color: RGB = WHITE,
+        rotation: int = 270,
+        center: bool = True,
+        spacing: int = 1,
+    ) -> None:
+        """Render `text` using the hardcoded 3×5 pixel font.
+
+        Designed for the clock / temperature use case where the text needs
+        to fit on the matrix's short axis (7 cols). At rotation=90/270 the
+        text runs along the long axis (36 rows), with 5 pixels of glyph
+        height leaving ~2 cols of vertical margin.
+
+        Supported characters: digits 0-9, ':', '.', ' ', '-', 'C', 'F', '%'.
+        Unknown characters render as blanks.
+
+        Args:
+          rotation: 0 = native (text on short axis, only short strings fit)
+                    90  = head tilted right (most common for clock)
+                    180 = upside down
+                    270 = head tilted left (also common, depends on user prefs)
+        """
+        if rotation not in (0, 90, 180, 270):
+            raise ValueError(f"rotation must be 0, 90, 180, or 270; got {rotation}")
+
+        bmp = font_3x5.render_text_bitmap(text, spacing=spacing)
+        if not bmp or not bmp[0]:
+            return
+        bmp_h = len(bmp)
+        bmp_w = len(bmp[0])
+
+        # Place bmp into a canvas matching the rotation-pre dimensions.
+        # For rotation 0/180 we want canvas = (MAX_COL × MAX_ROW) = portrait
+        # For rotation 90/270 we want canvas = (MAX_ROW × MAX_COL) = landscape.
+        if rotation in (90, 270):
+            canvas_w, canvas_h = lut.MAX_ROW, lut.MAX_COL
+        else:
+            canvas_w, canvas_h = lut.MAX_COL, lut.MAX_ROW
+
+        canvas = [[False] * canvas_w for _ in range(canvas_h)]
+        if center:
+            x0 = max(0, (canvas_w - bmp_w) // 2)
+            y0 = max(0, (canvas_h - bmp_h) // 2)
+        else:
+            x0, y0 = 0, 0
+        for y in range(bmp_h):
+            for x in range(bmp_w):
+                cx, cy = x0 + x, y0 + y
+                if 0 <= cx < canvas_w and 0 <= cy < canvas_h:
+                    canvas[cy][cx] = bmp[y][x]
+
+        # Rotate canvas → portrait (MAX_COL × MAX_ROW) LED grid coords.
+        if rotation == 0:
+            rotated = canvas
+        elif rotation == 90:
+            # 90° CW: (y, x) -> (x, max_y - y). Source landscape → portrait.
+            src_h, src_w = canvas_h, canvas_w
+            rotated = [[False] * lut.MAX_COL for _ in range(lut.MAX_ROW)]
+            for y in range(src_h):
+                for x in range(src_w):
+                    if canvas[y][x]:
+                        new_x = src_h - 1 - y
+                        new_y = x
+                        if 0 <= new_x < lut.MAX_COL and 0 <= new_y < lut.MAX_ROW:
+                            rotated[new_y][new_x] = True
+        elif rotation == 180:
+            rotated = [[canvas[canvas_h - 1 - y][canvas_w - 1 - x]
+                        for x in range(canvas_w)]
+                       for y in range(canvas_h)]
+        else:  # 270
+            src_h, src_w = canvas_h, canvas_w
+            rotated = [[False] * lut.MAX_COL for _ in range(lut.MAX_ROW)]
+            for y in range(src_h):
+                for x in range(src_w):
+                    if canvas[y][x]:
+                        new_x = y
+                        new_y = src_w - 1 - x
+                        if 0 <= new_x < lut.MAX_COL and 0 <= new_y < lut.MAX_ROW:
+                            rotated[new_y][new_x] = True
+
+        r_v, g_v, b_v = _clip_rgb(color)
+        for col, row in lut.ALL_COORDS:
+            if rotated[row - 1][col - 1]:
+                self._set_rgb(col, row, r_v, g_v, b_v)
+
+
+# -- helpers --
+
+def _clip_rgb(color: Sequence[int]) -> Tuple[int, int, int]:
+    """Clip and unpack any 3-tuple to (R, G, B) in 0..255."""
+    if len(color) != 3:
+        raise ValueError(f"color must be a 3-tuple, got {color}")
+    r, g, b = color
+    return (max(0, min(0xFF, int(r))),
+            max(0, min(0xFF, int(g))),
+            max(0, min(0xFF, int(b))))
