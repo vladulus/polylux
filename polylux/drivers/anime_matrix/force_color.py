@@ -58,6 +58,22 @@ function utf16leEncode(s) {
     return out;
 }
 
+function utf16leDecode(arr) {
+    let s = '';
+    for (let i = 0; i + 1 < arr.length; i += 2) {
+        s += String.fromCharCode(arr[i] | (arr[i+1] << 8));
+    }
+    return s;
+}
+
+// Zero-pad `target` (a numeric string) to exactly `origCharLen` characters so
+// the encoded UTF-16 byte length matches the original payload byte length.
+// "5" with origCharLen=3 -> "005". Returns null if target won't fit.
+function fitDecimal(target, origCharLen) {
+    if (target.length > origCharLen) return null;
+    return target.padStart(origCharLen, '0');
+}
+
 function parseFields(buf) {
     const fields = [];
     let off = 0;
@@ -109,21 +125,52 @@ if (decAddr) {
             const fB = fields.find(f => f.name === 'TextColorB[0]');
             if (!fR || !fG || !fB) return;
 
+            // Zero-pad targets to the ORIGINAL byte width so total plaintext
+            // size stays IDENTICAL — Helper allocated the output buffer for
+            // the original size, and the downstream parser tracks the outer
+            // length prefix per chunk. Any size delta risks state desync
+            // (see PROJECT_STATE.md §10b "Observed gotcha"). Same-length
+            // mutation is the only safe option without rebuilding the
+            // outer envelope.
+            const origRChars = fR.payloadLen / 2;
+            const origGChars = fG.payloadLen / 2;
+            const origBChars = fB.payloadLen / 2;
+            const newR = fitDecimal(TARGET_R, origRChars);
+            const newG = fitDecimal(TARGET_G, origGChars);
+            const newB = fitDecimal(TARGET_B, origBChars);
+            if (newR === null || newG === null || newB === null) {
+                const origR = utf16leDecode(fR.payload);
+                const origG = utf16leDecode(fG.payload);
+                const origB = utf16leDecode(fB.payload);
+                send({type:'log', level:'warn',
+                      msg: 'cannot fit target ('+TARGET_R+','+TARGET_G+','+TARGET_B+
+                           ') into original widths ('+origR+'='+origRChars+'ch, '+
+                           origG+'='+origGChars+'ch, '+origB+'='+origBChars+'ch). '+
+                           'Open Armoury Crate, set matrix RGB to 255/255/255 once, click Apply. '+
+                           'After that Polylux has headroom and can write any value.'});
+                return;
+            }
+
             const out = [];
             for (const f of fields) {
                 out.push(f.name.length);
                 for (let j = 0; j < f.name.length; j++) out.push(f.name.charCodeAt(j));
                 out.push(f.tag);
                 let payload, plen;
-                if (f.name === 'TextColorR[0]')      { payload = utf16leEncode(TARGET_R); plen = payload.length; }
-                else if (f.name === 'TextColorG[0]') { payload = utf16leEncode(TARGET_G); plen = payload.length; }
-                else if (f.name === 'TextColorB[0]') { payload = utf16leEncode(TARGET_B); plen = payload.length; }
+                if (f.name === 'TextColorR[0]')      { payload = utf16leEncode(newR); plen = payload.length; }
+                else if (f.name === 'TextColorG[0]') { payload = utf16leEncode(newG); plen = payload.length; }
+                else if (f.name === 'TextColorB[0]') { payload = utf16leEncode(newB); plen = payload.length; }
                 else                                  { payload = f.payload; plen = f.payloadLen; }
                 out.push(plen & 0xff, (plen >> 8) & 0xff, (plen >> 16) & 0xff, (plen >> 24) & 0xff);
                 for (let j = 0; j < payload.length; j++) out.push(payload[j]);
             }
-            if (out.length > this.cbOutput) {
-                send({type:'log', level:'warn', msg:'overflow refused: out='+out.length+' cap='+this.cbOutput});
+            // Same-length mutation: out.length should equal buf.length. Sanity-
+            // check that invariant before writing — if it fails, our parsing or
+            // padding logic has a bug; refuse rather than risk state desync.
+            if (out.length !== buf.length) {
+                send({type:'log', level:'error',
+                      msg: 'INVARIANT BROKEN: out='+out.length+' != buf='+buf.length+
+                           ' — refusing mutation. Bug in fitDecimal or parseFields.'});
                 return;
             }
             this.pPlain.writeByteArray(out);
@@ -151,26 +198,23 @@ class MatrixForceColorDriver:
         self._device = frida.get_local_device()
 
     def _find_pid(self) -> Optional[int]:
-        # frida.enumerate_processes() omits processes whose tokens our
-        # current user can't query; UserSessionHelper has restricted ACLs
-        # despite running in the user's session. Fall back to tasklist.
-        for proc in self._device.enumerate_processes():
-            if proc.name.startswith("ArmouryCrate.UserSessionH"):
-                return proc.pid
-        # Tasklist-based fallback. Names get truncated to 25 chars in the
-        # legacy table, so we match the truncated prefix.
+        # Use Windows `tasklist` exclusively — calling
+        # `frida.enumerate_processes()` triggers Frida's MANAGER ELEVATED
+        # helper which pops a UAC prompt and is fatal for a headless service.
+        # Names get truncated to 25 chars in the CSV table, so we match the
+        # truncated prefix `ArmouryCrate.UserSessionH`.
         import subprocess
         try:
             out = subprocess.check_output(
                 ["tasklist", "/fo", "csv", "/nh"],
                 text=True,
                 stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
             )
         except Exception:
             return None
         for line in out.splitlines():
             if "UserSessionH" in line and "ArmouryCrate" in line:
-                # CSV: "ImageName","PID","SessionName","Session#","MemUsage"
                 parts = [p.strip().strip('"') for p in line.split(",")]
                 if len(parts) >= 2:
                     try:

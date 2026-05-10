@@ -22,11 +22,11 @@ overhead are all gone after `extract_key()` returns.
 """
 from __future__ import annotations
 
+import subprocess
 import time
 from typing import Optional
 
 import frida
-import psutil
 
 
 HELPER_NAME = "ArmouryCrate.UserSessionHelper.exe"
@@ -110,10 +110,35 @@ class KeyExtractionError(RuntimeError):
 
 
 def find_helper_pid(name: str = HELPER_NAME) -> Optional[int]:
-    """Return the PID of the first matching process, or None."""
-    for proc in psutil.process_iter(["pid", "name"]):
-        if proc.info["name"] and proc.info["name"].lower() == name.lower():
-            return int(proc.info["pid"])
+    """Return the PID of the first matching process, or None.
+
+    Uses Windows `tasklist` exclusively. We deliberately do NOT call
+    `frida.get_local_device().enumerate_processes()` here because it
+    triggers Frida's MANAGER ELEVATED helper (frida-helper-x86_64.exe)
+    which fires a UAC prompt — fatal for a headless service. Tasklist
+    works for any user without elevation.
+
+    Note: tasklist truncates ImageName to 25 chars, so matching has to be
+    a prefix substring. The fully qualified `ArmouryCrate.UserSessionHelper.exe`
+    appears as `ArmouryCrate.UserSessionH` in the CSV.
+    """
+    try:
+        out = subprocess.check_output(
+            ["tasklist", "/fo", "csv", "/nh"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+        )
+    except Exception:
+        return None
+    for line in out.splitlines():
+        if "UserSessionH" in line and "ArmouryCrate" in line:
+            parts = [p.strip().strip('"') for p in line.split(",")]
+            if len(parts) >= 2:
+                try:
+                    return int(parts[1])
+                except ValueError:
+                    continue
     return None
 
 
