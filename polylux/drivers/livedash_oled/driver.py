@@ -1,71 +1,79 @@
-"""LiveDash OLED USB driver.
+"""LiveDash OLED high-level driver — depends on Chip1A21 for USB transport.
 
-Drives the motherboard OLED on the ROG Maximus Z690 Extreme via the same
-USB chip (VID 0B05 PID 1A21) that hosts the AniMe Matrix. The chip routes
-commands to the OLED or the matrix based on the HID command prefix byte 1:
+Drives the motherboard OLED on the ROG Maximus Z690 Extreme. The OLED
+lives on the same chip (PID 0x1A21) as the AniMe Matrix; both share USB
+interfaces via `polylux.drivers.chip_1a21.Chip1A21`.
 
-  byte 1 = 0x7F   ->  AniMe Matrix frame prep (followed by bulk pixel data)
-  byte 1 = 0x53   ->  OLED set text command (this module)
-  byte 1 = 0xC1   ->  matrix related (observed in capture, paired with bulk)
-  byte 1 = 0xD0   ->  control / power / refresh (untested)
-  byte 1 = 0x51, 0x5C, 0xDC   ->  control packets (untested)
+Two operations are supported:
 
-Protocol for OLED text (verified by USBPcap capture of AC hardware monitor,
-then byte-for-byte replay confirmed live on Vlad's board 2026-05-10):
+1. `set_text(label, value)` — set a 2-line label+value on the OLED.
+   Single HID Output Report with prefix 0xEC 0x53 0x00. Used by the
+   hardware-monitor mode in AC.
 
-  65-byte HID Output Report on iface 1 (INT ep 0x02):
-    pos 0      = 0xEC                       magic
-    pos 1      = 0x53                       'S' — set OLED text
-    pos 2      = 0x00                       reserved/param
-    pos 3..20  = label  (ASCII, 18 bytes max, null-padded)
-    pos 21..64 = value  (UTF-8, 44 bytes max, null-padded — supports
-                          unit symbols like \\u2103 (℃),
-                          \\u3393 (㎓), \\u2193 (↓))
+2. `upload_image(gif_bytes)` — upload a custom GIF87a animation
+   (256×64 monochrome, ≤100KB) for the Custom Animation mode. The
+   upload sequence is:
 
-The OLED shows the label on one line and the value on another. Calling
-set_text() overwrites whatever was shown previously.
+     HID ec 72 01 00 01 00 00 00      register upload
+     HID ec 51 00 00 00 00 00 00      query / lock
+     HID ec 73 01 00 00 00 00 00      start send
+     HID ec 7f 02 <sizeLE_lo> <sizeLE_hi> 00 00 00   bulk prep
+     BULK OUT iface 0 ep 0x01         GIF bytes + zero pad to 4096B
+
+   Note: the OLED may need to be in "Custom Animation" mode in firmware
+   for the uploaded image to actually be displayed (vs the default
+   Hardware Monitor mode). Mode-switch protocol TBD.
+
+Usage::
+
+    from polylux.drivers.livedash_oled import LiveDashOLED
+
+    with LiveDashOLED.open() as oled:
+        oled.set_text("CPU Temp.", "32.0 \\u2103")
+
+    # Shared with matrix:
+    from polylux.drivers.chip_1a21 import Chip1A21
+    from polylux.drivers.anime_matrix import AniMeMatrix
+    with Chip1A21.open() as chip:
+        matrix = AniMeMatrix(chip)
+        oled = LiveDashOLED(chip)
+        matrix.send_frame(...)
+        oled.set_text("POLYLUX", "STANDALONE")
 """
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Optional
 
+from polylux.drivers.chip_1a21 import Chip1A21, Chip1A21Error
 
-VID = 0x0B05
-PID = 0x1A21
 
 HID_PACKET_SIZE = 65
+OLED_BULK_CHUNK = 4096
+
+# OLED text-mode protocol fields
 LABEL_OFFSET = 3
 LABEL_MAX_BYTES = 18
 VALUE_OFFSET = 21
 VALUE_MAX_BYTES = 44
 
-HID_INTERFACE = 1   # mi_01
+# OLED mode-switch back to text/Hardware Monitor mode. Required after
+# upload_image() — Custom Animation upload silently puts the OLED into
+# "Custom Animation" mode, where 0xEC 0x53 text writes are ignored.
+# Verified live with Vlad 2026-05-11: of all candidates tried after a
+# stuck image-mode state (ec 71/5c/5d/99/a0/a1/af/73), ec 51 09 was the
+# ONLY one that restored text rendering.
+_HID_OLED_TEXT_MODE = bytes([0xEC, 0x51, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00]) + b"\x00" * 57
 
 
-def _libusb_dir() -> Path:
-    import libusb
-    return Path(libusb.__file__).parent / "_platform" / "windows" / "x86_64"
-
-
-def _add_libusb_to_path() -> Path:
-    p = _libusb_dir()
-    if str(p) not in os.environ.get("PATH", ""):
-        os.environ["PATH"] = str(p) + os.pathsep + os.environ.get("PATH", "")
-    return p
-
-
-class LiveDashOLEDError(RuntimeError):
-    pass
+class LiveDashOLEDError(Chip1A21Error):
+    """Backwards-compat alias for the chip error."""
 
 
 def build_text_packet(label: str, value: str) -> bytes:
     """Build a 65-byte HID Output Report that displays `label` + `value`.
 
-    Both arguments are truncated to their max byte length (18 for label,
-    44 for value) after UTF-8 encoding. Excess bytes are silently dropped.
+    Both arguments are truncated to their max byte length (18 / 44) after
+    UTF-8 encoding. Excess bytes are silently dropped.
     """
     pkt = bytearray(HID_PACKET_SIZE)
     pkt[0] = 0xEC
@@ -78,50 +86,47 @@ def build_text_packet(label: str, value: str) -> bytes:
     return bytes(pkt)
 
 
+def build_image_prep_packets(image_size: int) -> tuple[bytes, bytes, bytes, bytes]:
+    """Return the 4 HID prep packets that precede a bulk OUT image upload.
+
+    Each is 65 bytes (full HID Output Report length).
+    Sequence: (register, query/lock, start, bulk-prep-with-size).
+    """
+    size_lo = image_size & 0xFF
+    size_hi = (image_size >> 8) & 0xFF
+    p72 = bytes([0xEC, 0x72, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00]) + b"\x00" * 57
+    p51 = bytes([0xEC, 0x51, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]) + b"\x00" * 57
+    p73 = bytes([0xEC, 0x73, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]) + b"\x00" * 57
+    p7f = bytes([0xEC, 0x7F, 0x02, size_lo, size_hi, 0x00, 0x00, 0x00]) + b"\x00" * 57
+    return p72, p51, p73, p7f
+
+
 @dataclass
 class LiveDashOLED:
-    """Open handle to the motherboard OLED.
+    """High-level driver for the motherboard OLED.
 
-    Hold one of these for the duration of your service. The OLED chip
-    is shared with the AniMe Matrix (last writer wins on this device),
-    so own it for the entire Polylux uptime.
+    Args:
+      chip: an open `Chip1A21`. Use `LiveDashOLED.open()` to create one
+            on the fly for the simple single-display case.
     """
-    _hid_dev: object = None   # hid.device
+    chip: Chip1A21
+    _owns_chip: bool = False
+    _text_mode_armed: bool = False     # have we sent ec 51 09 this session?
 
     @classmethod
     def open(cls) -> "LiveDashOLED":
-        """Open the HID interface for OLED text commands.
-
-        Raises LiveDashOLEDError if the device isn't present or is held
-        by another process (typically ASUS LightingService / AC).
-        """
-        _add_libusb_to_path()
-        try:
-            import hid
-        except ImportError as ex:
-            raise LiveDashOLEDError(f"required deps not installed: {ex}")
-
-        hid_devs = list(hid.enumerate(VID, PID))
-        if not hid_devs:
-            raise LiveDashOLEDError(
-                f"OLED Controller VID 0x{VID:04x} PID 0x{PID:04x} not found "
-                f"(no HID interface enumerated)"
-            )
-        hid_dev = hid.device()
-        try:
-            hid_dev.open_path(hid_devs[0]["path"])
-        except OSError as ex:
-            raise LiveDashOLEDError(f"failed to open HID interface: {ex}") from ex
-        return cls(_hid_dev=hid_dev)
+        """Open a private Chip1A21 and return an OLED bound to it."""
+        chip = Chip1A21.open()
+        instance = cls(chip=chip, _owns_chip=True)
+        chip._refcount += 1
+        return instance
 
     def close(self) -> None:
-        """Release the HID interface. Idempotent."""
-        if self._hid_dev is not None:
-            try:
-                self._hid_dev.close()
-            except Exception:
-                pass
-            self._hid_dev = None
+        if self._owns_chip and self.chip is not None:
+            self.chip._refcount -= 1
+            if self.chip._refcount <= 0:
+                self.chip.close()
+            self._owns_chip = False
 
     def __enter__(self) -> "LiveDashOLED":
         return self
@@ -132,32 +137,62 @@ class LiveDashOLED:
     # --- public API ---
 
     def set_text(self, label: str, value: str) -> None:
-        """Display `label` / `value` on the OLED.
+        """Display `label` / `value` on the OLED (text / Hardware Monitor mode).
 
         Args:
-          label: top text, ASCII, up to 18 bytes after UTF-8 encode.
-          value: bottom text, UTF-8, up to 44 bytes; supports unit
-                 glyphs like '\\u2103' (℃), '\\u3393' (㎓).
+          label: top line, ASCII, up to 18 bytes after UTF-8 encode.
+          value: bottom line, UTF-8, up to 44 bytes; supports unit glyphs.
+
+        Sends `ec 51 09` (switch to text mode) once per LiveDashOLED
+        instance so that text rendering keeps working even after a prior
+        `upload_image()` switched the OLED into Custom Animation mode.
+        Idempotent.
         """
-        if self._hid_dev is None:
-            raise LiveDashOLEDError("OLED not open")
+        if not self._text_mode_armed:
+            self.chip.hid_write(_HID_OLED_TEXT_MODE)
+            self._text_mode_armed = True
         pkt = build_text_packet(label, value)
-        n = self._hid_dev.write(pkt)
-        if n < 0:
-            raise LiveDashOLEDError(f"HID write failed: {self._hid_dev.error()}")
-        if n != HID_PACKET_SIZE:
-            raise LiveDashOLEDError(f"short HID write: {n}/{HID_PACKET_SIZE}")
+        self.chip.hid_write(pkt)
+
+    def upload_image(self, image_bytes: bytes) -> None:
+        """Upload a GIF87a custom animation to the OLED (256×64, mono).
+
+        Args:
+          image_bytes: raw GIF87a file contents. Max ~100KB per AC UI docs.
+
+        Note: this only uploads the image to firmware. The OLED may be
+        in Hardware Monitor mode and won't display the custom image
+        until switched to Custom Animation mode. Mode-switch is TBD —
+        document for users that they may need to reboot or apply
+        Custom Animation in AC at least once.
+        """
+        if not image_bytes.startswith(b"GIF8"):
+            raise ValueError("image_bytes must be a GIF file (magic 'GIF8...')")
+        if len(image_bytes) == 0:
+            raise ValueError("image_bytes is empty")
+        if len(image_bytes) > 100 * 1024:
+            raise ValueError(
+                f"image_bytes too large: {len(image_bytes)} > 100KB max"
+            )
+
+        import time
+        size = len(image_bytes)
+        p72, p51, p73, p7f = build_image_prep_packets(size)
+        for pkt in (p72, p51, p73, p7f):
+            self.chip.hid_write(pkt)
+            time.sleep(0.05)
+
+        # Pad to next 4KB boundary, send as one bulk transfer.
+        padded_len = ((size + OLED_BULK_CHUNK - 1) // OLED_BULK_CHUNK) * OLED_BULK_CHUNK
+        padded = image_bytes + b"\x00" * (padded_len - size)
+        n = self.chip.bulk_write(padded, timeout_ms=5000)
+        if n != padded_len:
+            raise LiveDashOLEDError(
+                f"OLED bulk write incomplete: {n}/{padded_len}"
+            )
 
     def send_raw_hid(self, packet: bytes) -> None:
-        """Send a raw 65-byte HID Output Report.
-
-        Use for experimental commands (control prefixes 0xD0, 0x51, 0x5C,
-        0xDC, etc.) that we haven't fully decoded yet.
+        """Send a raw HID Output Report. For experimenting with undecoded
+        commands (ec d0, ec 51 09, ec 5c 01 01, etc.).
         """
-        if self._hid_dev is None:
-            raise LiveDashOLEDError("OLED not open")
-        if len(packet) != HID_PACKET_SIZE:
-            raise ValueError(f"packet must be {HID_PACKET_SIZE} bytes, got {len(packet)}")
-        n = self._hid_dev.write(packet)
-        if n < 0:
-            raise LiveDashOLEDError(f"HID write failed: {self._hid_dev.error()}")
+        self.chip.hid_write(packet)
