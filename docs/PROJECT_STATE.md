@@ -482,11 +482,27 @@ truth for any future LUT refinement.
     not wired in yet.
   - Task Scheduler auto-start installer: already exists (commit c6f557f).
 
+### v0.2 SHIPS — final empirical confirmation (2026-05-10 evening)
+
+`scratch/rgb_cycle.py` cycles the matrix through R / G / B / WHITE /
+YELLOW / MAGENTA / CYAN / OFF. Vlad photographed all 8 frames live.
+Every frame produces a distinct visible state — the chip responds to
+every byte we write. The matrix is fully driven by Polylux without any
+ASUS daemon participation.
+
+The frames are NOT clean single-color (e.g. the R-only frame shows top
+in white, middle in red, bottom dark). That's because our plane offsets
+are approximate (256/256/256); the real plane sizes are smaller, so
+bytes 0-255 = 0xFF spills into both R plane (full) and the start of G
+plane (~50 bytes), producing red+green = yellow / white in some pixels.
+Pure-color rendering needs the precise plane boundaries — that's v0.3
+LUT crawler work. For SHIP v0.2 we have unambiguous per-pixel RGB
+control, just not yet a clean rendering primitive.
+
 ### Next concrete steps
 
-1. Wire `usb_direct.AniMeMatrix` into `polylux/service/main.py` (replace
-   the v0.1 Frida MatrixForceColorDriver with a USB-based driver that
-   cycles a "Polylux is alive" frame on startup).
+1. ✅ Wire `usb_direct.AniMeMatrix` into `polylux/service/main.py`
+   (done — commit 04d0bcc, --matrix-driver usb is the default).
 2. Build a `frame_library.py` that loads captured frames from the pcap
    and exposes them as named effects (e.g. clock_replay, all_bright).
 3. Write the LUT crawler (automated photo OCR from a USB camera, OR a
