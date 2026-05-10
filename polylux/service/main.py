@@ -23,6 +23,7 @@ from pathlib import Path
 from polylux import config as cfg_mod
 from polylux.crypto import KeyExtractionError, extract_key, find_helper_pid
 from polylux.drivers.anime_matrix.force_color import MatrixForceColorDriver
+from polylux.drivers.anime_matrix.usb_force_color import UsbForceColorDriver
 
 log = logging.getLogger("polylux")
 
@@ -47,6 +48,12 @@ def main() -> int:
         default="INFO",
         choices=("DEBUG", "INFO", "WARNING", "ERROR"),
     )
+    parser.add_argument(
+        "--matrix-driver",
+        default="usb",
+        choices=("usb", "frida"),
+        help="usb (v0.2, direct USB, no ASUS daemons needed) or frida (v0.1, decrypt-substitute, requires UWP active)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -61,31 +68,35 @@ def main() -> int:
     log.info("oled: enabled=%s", cfg.oled.enabled)
     log.info("ryujin_lcd: enabled=%s", cfg.ryujin_lcd.enabled)
 
-    # Best-effort key extraction at startup. Not strictly required for the
-    # decrypt-substitute path (force-color mutates plaintext post-decrypt
-    # without needing the key), but having it lets us add live monitoring
-    # and prepare for v0.3 inject-into-UWP work.
-    helper_pid = find_helper_pid()
-    if helper_pid is None:
-        log.info("UserSessionHelper not running yet; key extraction deferred")
-    else:
-        try:
-            key = extract_key(helper_pid, timeout=10.0)
-            log.info("AES-256 key extracted from helper PID %d (32 bytes, fingerprint=%s...)",
-                     helper_pid, key.hex()[:16])
-        except KeyExtractionError as ex:
-            log.warning("key extraction failed (non-fatal): %s", ex)
+    # Best-effort key extraction at startup. Only meaningful for the
+    # frida driver (v0.1) and future passive monitoring. The usb driver
+    # (v0.2) doesn't need it — it talks to the chip directly.
+    if args.matrix_driver == "frida":
+        helper_pid = find_helper_pid()
+        if helper_pid is None:
+            log.info("UserSessionHelper not running yet; key extraction deferred")
+        else:
+            try:
+                key = extract_key(helper_pid, timeout=10.0)
+                log.info("AES-256 key extracted from helper PID %d (fingerprint=%s...)",
+                         helper_pid, key.hex()[:16])
+            except KeyExtractionError as ex:
+                log.warning("key extraction failed (non-fatal): %s", ex)
 
     drivers: list = []
     threads: list[threading.Thread] = []
 
     if cfg.matrix.enabled:
-        d = MatrixForceColorDriver(color=cfg.matrix.color)
+        if args.matrix_driver == "usb":
+            d = UsbForceColorDriver(color=cfg.matrix.color)
+            log.info("matrix driver: usb_direct (v0.2)")
+        else:
+            d = MatrixForceColorDriver(color=cfg.matrix.color)
+            log.info("matrix driver: frida force-color (v0.1, requires UWP)")
         drivers.append(d)
         t = threading.Thread(target=d.run_forever, daemon=True, name="matrix-driver")
         t.start()
         threads.append(t)
-        log.info("matrix driver started")
     else:
         log.info("matrix driver disabled by config")
 
