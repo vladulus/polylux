@@ -1,6 +1,6 @@
 # Polylux — Project State
 
-**Last updated:** 2026-05-09
+**Last updated:** 2026-05-10 (afternoon — see §8b for v0.2 progress)
 
 This document is the single source of truth for project state across sessions.
 Anyone (Claude or human) starting a new session should read this **first**, then
@@ -361,6 +361,9 @@ The plaintext envelope also carries:
 
 ### What still blocks end-to-end Polylux→hardware replay
 
+> **STATUS UPDATE: see §8b for current state. Items 2 + part of 3 are RESOLVED
+> as of 2026-05-10 afternoon. Items 1 and 4 remain.**
+
 1. **Reassemble the full SetMatrixLED message.** BCryptDecrypt fires per
    AES block / fragment; one Apply emits ~10–20 fragments that need to be
    stitched into one logical message. Easy work, just bookkeeping.
@@ -376,6 +379,88 @@ The plaintext envelope also carries:
 
 Approach (b) gives us a fully standalone Polylux. Approach (a) requires
 Frida always running. Either way: this is the next session's work.
+
+## 8b. v0.2 progress (2026-05-10 afternoon, commits 2dafb99 / f67d756)
+
+Two of the §8 "blockers" are dead. Cipher and wire format are fully solved
+in pure Python, validated end-to-end against live UserSessionHelper traffic
+on PID 14624.
+
+### What's done
+
+**1. Cipher fully unlocked** (commit `2dafb99`):
+
+Cipher is **AES-256-GCM** with 12-byte nonce, 16-byte tag, no AAD. The
+symmetric key is exportable from a running UserSessionHelper.exe via
+`BCryptExportKey(handle, "KeyDataBlob")` after grabbing the handle from
+`BCryptEncrypt.args[0]`. Per-process ephemeral — rotates on each helper
+restart. New module `polylux/crypto/aura_gcm.py` (`AuraCipher` class) is
+pure Python via `cryptography` lib. Test `tests/test_aura_gcm.py` validates
+encrypt + decrypt against a live capture vector byte-perfect (5/5 green).
+
+The `pPaddingInfo` arg of `BCryptEncrypt` is `BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO`
+(cbSize=0x58); nonce + tag pointers are at offsets +8/+40. Use that to
+extract during capture; no need for `BCryptOpenAlgorithmProvider` hooks.
+
+**2. Wire framing decoded** (commit `f67d756`):
+
+One frame on the TCP socket = `[u32 LE length] [12B nonce] [N bytes ciphertext] [16B tag]`
+where length = 12 + N + 16. New module `polylux/wire/frame.py`
+(`Frame` dataclass + `pack_frame` / `unpack_frame` / `read_frame(stream)`).
+`tests/test_frame.py` 8/8 green, includes a real-capture parse vector.
+
+**3. End-to-end pipeline validated**:
+
+`scratch/frida_capture_outbound_paired.py` simultaneously captures
+`BCryptEncrypt` (plaintext, nonce, ct, tag) and outbound wire bytes
+(send + WSASend), then confirms two things:
+
+  - `AuraCipher(key).encrypt(plain, nonce) == (ct, tag)` from BCrypt — crypto OK
+  - `pack_frame(Frame(nonce, ct, tag))` appears verbatim in the outbound
+    byte stream — wire format OK
+
+Run on PID 14624 caught 2 BCryptEncrypt + 2 wire frames, all four matched
+(2/2 crypto, 2/2 wire offset 0 + 48). Pipeline is sound.
+
+**Caveat about that validation:** the captured frames were small
+(16-byte plaintext = header chunk of background QuerySMTCInfo poll, sent
+via `send()`). SetMatrixLED Apply traffic uses `WSASend` and is bigger —
+not in this 25 s window because UWP was idle. Per §8a the capture script
+that nails real Apply bursts is `scratch/frida_capture_v2.py` (it
+correlates BCrypt output address against WSABUF address). My pipeline
+primitives apply identically to those bigger frames; the wire format
+doesn't change between traffic types.
+
+### What's still left for v0.2 standalone
+
+1. **`polylux/crypto/key_extractor.py`**: wrap the Frida-attach +
+   `BCryptExportKey` dance into a clean Python helper. Service calls
+   `extract_key_from_helper(pid)` → `bytes`. Frida runs once at startup,
+   not in the hot path.
+2. **Multi-chunk message assembly**: SetMatrixLED is split into
+   ~10-20 BCryptEncrypt calls (16B header + 4B length + body chunks).
+   Need to know chunking rules for our own outbound messages. Capture a
+   real Apply via `scratch/frida_capture_v2.py` and count the chunks —
+   that's the spec.
+3. **TCP client**: open socket to 51100 (helper's listen port for UWP→helper)
+   or 50100 (service's listen port for helper→service). Need to test
+   which accepts a fresh client. If 51100 needs the UWP-style auth,
+   fallback is hijacking helper's existing socket from inside Frida
+   (cheap because we're already attached for key extraction).
+4. **First write smoke test**: `force_color(255, 0, 0)` with UWP closed.
+   Vlad confirms matrix turns red.
+5. **Kill UWP + helper**, run only Polylux service, measure RAM saving.
+
+### Reference
+
+  - Captured key + cipher params: `scratch/captures/v0.2/aes_key_extracted.txt`
+    (gitignored — per-process, regenerate per session)
+  - Live GCM tuple: `scratch/captures/v0.2/gcm_pairs.jsonl`
+    (gitignored)
+  - Crypto module: `polylux/crypto/aura_gcm.py`
+  - Wire module: `polylux/wire/frame.py`
+  - Validation script: `scratch/frida_capture_outbound_paired.py`
+  - Stronger capture (use this for real Apply bursts): `scratch/frida_capture_v2.py`
 
 ### 8a. UserSessionHelper uses WSASend, NOT send() — important capture gotcha
 
@@ -577,6 +662,8 @@ Fix for production Polylux:
 | 2026-05-09 | Reject pure ctypes-on-SDK-DLL approach | DLLs are 7-export plugin shims (`ExecuteFunction` dispatcher). They need ArmourySocketServer running anyway. The WebSocket route is cleaner. |
 | 2026-05-09 | Reject pure USB protocol RE | Estimated 1–2 days per device. Strategy C (use existing services) gets us to first frame in hours. |
 | 2026-05-09 | Strategy C locked in | Use ArmourySocketServer + LightingService as backend. Replace only the UI bloat. ~80 % bloat eliminated. |
+| 2026-05-10 | Pure-Python crypto (path b) over Frida-RPC (path a) | Key extracts cleanly via BCryptExportKey "KeyDataBlob"; AES-256-GCM matches the captured cipher byte-perfect. Frida required only at service startup (key extraction), not the hot path. |
+| 2026-05-10 | Decline driver-level investigation for now | Strategy C just got 100 % validated; v0.2 is ~30 min from working. Driver RE was already rejected 2026-05-09 for cost + brick risk (§10b rule 2). Re-evaluate only if the ASUS daemon path breaks under a future update. |
 
 ## 13. Reference paths
 

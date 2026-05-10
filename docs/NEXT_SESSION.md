@@ -79,84 +79,53 @@ fields as `current.json`. Full format documented in `PROJECT_STATE.md` §8.
 
 ## First action when you resume
 
-DON'T REDO DISCOVERY. The protocol is documented. Open
-`PROJECT_STATE.md` §8 and use it as the spec.
+DON'T REDO DISCOVERY. Read `PROJECT_STATE.md` §8 (protocol spec) and §8b
+(v0.2 progress as of 2026-05-10 afternoon). The cipher, wire framing, and
+the Frida capture pattern are all solved.
 
-**Confirmed reality (verified 2026-05-09 evening, commits 0fe7688 / smart_replay):**
+**v0.2 state going into the next stretch:**
 
-- Hooks on `send()` and `BCryptEncrypt` from inside UserSessionHelper see
-  only background poll traffic during a matrix Apply (44-byte max bodies,
-  QuerySMTCInfo and QueryNotification). They do NOT see the SetMatrixLED.
-- Hook on `BCryptDecrypt` sees the FULL 2986-byte SetMatrixLED plaintext
-  arriving (we captured it earlier).
-- Conclusion: ArmouryCrate.exe (UWP UI, PID 37048) sends SetMatrixLED to
-  UserSessionHelper via UserSessionHelper's listening port `51100`,
-  encrypted. UserSessionHelper decrypts (BCryptDecrypt fires) and applies.
+  - AES-256-GCM, key extracted via `BCryptExportKey` "KeyDataBlob"
+    — `polylux/crypto/aura_gcm.py`, validated against live capture
+  - Wire frame `[u32 length][12B nonce][N B ct][16B tag]`
+    — `polylux/wire/frame.py`, validated against live wire bytes
+  - End-to-end pipeline (`AuraCipher.encrypt` → `pack_frame`) byte-matches
+    UserSessionHelper's outbound WSASend on the same socket — see
+    `scratch/frida_capture_outbound_paired.py`
+  - Capture script for real Apply bursts: `scratch/frida_capture_v2.py`
+    (uses WSASend hooks + buffer-address correlation; see §8a)
 
-**Quick win path** for next session (~30-60 min):
+**Next concrete steps for v0.2 (no UWP):**
 
-1. Hook `recv()` / `WSARecv()` in UserSessionHelper (PID 15668) to capture
-   the INBOUND ciphertext on port 51100 — alongside the existing
-   BCryptDecrypt hook. Match the wire bytes that arrived to the plaintext
-   that BCryptDecrypt produced. Save the wire ciphertext for that one
-   specific Apply burst.
-2. Open our own TCP connection to `127.0.0.1:51100` from Python.
-3. Send the captured inbound bytes verbatim. UserSessionHelper should
-   decrypt and process them as if they came from ArmouryCrate.exe.
-4. Matrix should change to whatever Vlad's Apply set during capture.
-5. If yes — END-TO-END WORKING. Then mutate plaintext, re-encrypt
-   (we have the Frida-RPC encrypt path proven; key may be shared between
-   inbound and outbound or may be different — check by encrypting our
-   payload and comparing tag length / cipher to a captured one).
-6. If sending bytes to 51100 from Python fails because the server expects
-   a TLS handshake or session-key establishment first, then we have to
-   replicate that. Look for the handshake bytes in the capture before the
-   first SetMatrixLED frame — those are the session setup.
+1. **`polylux/crypto/key_extractor.py`** — clean Frida wrapper that
+   attaches to UserSessionHelper, grabs the key handle from
+   `BCryptEncrypt.args[0]` on the first call, calls `BCryptExportKey`
+   "KeyDataBlob", parses out the 32-byte AES key, detaches. Returns
+   `bytes`. Service calls this once at startup.
 
-If 51100 has a per-connection session key and won't talk to a fresh client
-without ArmouryCrate.exe-style auth, fallback: hijack the existing
-ArmouryCrate.exe → UserSessionHelper connection by writing into THAT
-socket from inside Frida (which is attached to UserSessionHelper, so we
-can call `send()` on the socket the kernel knows is paired with the
-already-authenticated peer).
+2. **Capture a real SetMatrixLED Apply** with `frida_capture_v2.py` while
+   Vlad clicks Apply in UWP. Save plaintext + wire frames. Count the chunks
+   per logical message (header chunk, length chunk, body chunks). That
+   gives us the spec for building outbound messages.
 
-The remaining engineering after the quick win:
+3. **TCP client** — open socket to `127.0.0.1:51100`. Try sending the
+   captured Apply bytes verbatim (replay). If accepted, matrix changes
+   color → §8a's commit `ad6cbd8` already proved replay works at wire
+   level, so this should be straightforward.
 
-1. **Capture a full Apply session and reassemble fragments.** The current
-   capture only got the first 200-byte fragment. Modify
-   `scratch/frida_bcrypt.py` so it accumulates plaintext fragments into a
-   single buffer until it sees a complete message (use the outer 4-byte
-   LE length prefix observed in `frida_winsock.py` to know the total).
-   Save full plaintext to `scratch/captures/setmatrixled_full.bin`.
+4. **Mutate + send** — change `TextColorR/G/B` in the captured plaintext,
+   re-encrypt with `AuraCipher`, re-frame, send. Smoke test:
+   `force_color(255, 0, 0)` on a closed UWP. Vlad confirms.
 
-2. **Write the binary serializer/deserializer** as
-   `polylux/format/aura_proto.py` matching the type tags table from §8.
-   Round-trip test against the captured plaintext (must produce identical
-   bytes).
+5. **If port 51100 rejects fresh clients** (session-key handshake required),
+   fallback is to hijack UWP's existing socket from inside Frida — we're
+   already attached for key extraction, so calling `send()`/`WSASend` from
+   inside the helper process is essentially free.
 
-3. **Decide the encrypt path** (one of):
-   - **(a) Frida-as-RPC**: stash `BCRYPT_KEY_HANDLE` on first Encrypt
-     call, expose RPC from Frida JS that takes plaintext, calls
-     `BCryptEncrypt` with that handle, returns ciphertext. Polylux core
-     drives this via `frida.attach`. Pro: works today. Con: Frida is a
-     runtime dep.
-   - **(b) Standalone**: hook `BCryptOpenAlgorithmProvider`,
-     `BCryptGenerateSymmetricKey`, `BCryptSetProperty` to learn cipher
-     suite, key, IV. Replicate from Python with `cryptography` lib.
-     Pro: pure Python, no Frida. Con: more RE work.
-   - Recommendation for v0.1: do (a) first to prove end-to-end works,
-     then promote to (b) for v0.2.
+6. **Kill UWP + helper after smoke test passes**, run only Polylux service,
+   measure the RAM win.
 
-4. **Send-side**: open our own TCP connection to 127.0.0.1:50100. Send
-   `<u32_LE_length><ciphertext>` framed messages. Should get a similar
-   reply we already see in capture (`'result' = 1` or JSON wstring).
-
-5. **Visual confirmation**: send a SetMatrixLED with
-   `TextColorR=255, TextColorG=0, TextColorB=0` and ask Vlad if matrix
-   turns red. That's the end-to-end smoke test.
-
-6. After matrix works → repeat the same playbook for Ryujin LCD
-   (`Cmd='???'` — capture during a Ryujin slideshow change to learn it).
+**After v0.2 ships**: §8c will be added with v0.3 plan (Ryujin LCD).
 
 ## What Vlad does
 
