@@ -413,21 +413,61 @@ Per-frame sequence also corrected: `ec c1 00` must be paired with
 ec c1, which worked when AC kept the chip warm but failed after AC
 was uninstalled.
 
-### 9.2 OLED + chip mode model
+### 9.2 OLED + chip mode model — COMPLETE slot map
 
-**Critical insight discovered in the final hour of the session**:
-`ec 51 NN` is a **chip-global mode switch**, not just an OLED switch.
-Setting any preset slot puts the entire chip into that preset and
-suppresses data-input writes (both matrix bulk and OLED text):
+**Critical insight**: `ec 51 NN` is a **chip-global mode switch**, not
+just an OLED switch. Setting any preset slot puts the entire chip into
+that preset and suppresses data-input writes (both matrix bulk and OLED
+text). After empirical sweep across NN = 0x00..0x7F:
 
-  ec 51 00             OLED Hardware Monitor (text mode, equiv to 0x09)
-  ec 51 01             OLED Q-Code numeric display (boot code style)
-  ec 51 02-05          matrix preset animation slots
-  ec 51 09             OLED text/HW Monitor mode (same as 0x00 family)
-  ec 51 0a-0f          (variants tested — TBD)
-  ec 51 10 01 01       OLED Q-Code mode with extra params
-  ec 51 11             matrix preset slot
-  ec 51 NN             other slot indices (chip has many factory presets)
+  ec 51 00              OLED Hardware Monitor (text mode)
+  ec 51 01              OLED Q-Code numeric display (boot codes)
+  ec 51 02              matrix preset animation #1
+  ec 51 03              matrix preset animation #2
+  ec 51 04              matrix preset animation #3
+  ec 51 05              matrix preset animation #4
+  ec 51 06              (unused)
+  ec 51 07              (unused)
+  ec 51 08              (unused)
+  ec 51 09              OLED text/HW Monitor mode (same family as 0x00)
+  ec 51 0a..0f          (unused)
+  ec 51 10              OLED preset GIFs (factory animations:
+                         EXTREME / shark / swimmer)
+  ec 51 10 01 01        OLED Q-Code mode with extra params
+  ec 51 11              matrix preset (different animation)
+  ec 51 12..14          (unused)
+  ec 51 15              **EXIT factory preset mode** — chip returns
+                         to data-input mode (matrix accepts bulk
+                         frames, OLED accepts ec 53 text)
+  ec 51 16..7f          (unused, no visible effect)
+
+The custom-image activation slot is STILL unidentified after the
+sweep. AC's pcap shows that after `ec 73 ff` (end-of-upload) it sends
+`ec 51 10 01 01` — which we discovered is Q-Code mode, not Custom
+Image. So either:
+  - Custom Image needs a different prefix entirely (not `ec 51`)
+  - Custom Image needs `ec 51 10` with different extra bytes
+  - Custom Image uses one of the matrix slots (02-05) with the OLED
+    chip configured to display image content there
+
+This is the last piece for v0.2 SHIP. Plan: fresh targeted pcap of a
+single Apply on OLED Custom Image in AC, monitor live HID writes
+during the moment the OLED visibly switches to the uploaded image.
+
+The data-input mode (`ec 42 01` for matrix, `ec 53` writes for OLED
+text) is itself a "slot" of sorts. To recover matrix + OLED data-mode
+after a preset has been activated:
+
+    chip._initialized = False
+    chip.init_for_matrix()       # re-sends ec dc + ec 82 + ec c1 + ec 42 01
+    matrix.clear(); matrix.flush()
+    oled.set_text(...)            # sends ec 51 09 again
+
+Or simpler: send `ec 51 15` (exit preset) before any data writes.
+
+The way AC keeps both displays "live" during normal operation: it
+stays in data-input mode and only switches to preset slots when the
+user explicitly selects one in the UI. Polylux should do the same.
 
 The data-input mode (`ec 42 01` for matrix, `ec 53` writes for OLED
 text) is itself a "slot" of sorts. To recover matrix + OLED data-mode
