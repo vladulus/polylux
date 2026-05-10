@@ -380,6 +380,104 @@ The plaintext envelope also carries:
 Approach (b) gives us a fully standalone Polylux. Approach (a) requires
 Frida always running. Either way: this is the next session's work.
 
+## 8d. v0.2 BREAKTHROUGH — direct USB control of AniMe Matrix (2026-05-10 evening)
+
+**The wall in §8c (peer check on UWP / Helper / Service) was bypassed by
+attacking the chip directly via USB**, per Vlad's pivot ("dacă nu scăpăm
+de AC nu am făcut nimic"). Strategy C is dead; we now own the matrix.
+
+### Hardware
+
+  USB device:    VID 0x0B05 PID 0x1A21 ("OLED Controller")
+                  — AniMe Matrix is on this chip on Vlad's Z690 Extreme.
+  Driver:        WinUSB (already installed by ASUS — no swap needed)
+  Interfaces:
+    iface 0 (mi_00, vendor specific class 0xff):
+      ep 0x01 BULK OUT (max packet 64B)
+      ep 0x81 BULK IN
+    iface 1 (mi_01, HID class 0x03):
+      ep 0x02 INT  OUT (max packet 64B)
+      ep 0x82 INT  IN
+
+### Per-frame protocol (decoded by USBPcap during real Apply)
+
+  1. HID Output Report on iface 1 (INT ep 0x02), exactly 65 bytes:
+       [0xEC, 0x7F, 0x04, 0x00, 0x03] + 60 zero bytes
+     The "frame begin" signal. Without it, the bulk write that follows
+     is silently ignored by the firmware.
+
+  2. Bulk OUT on iface 0 ep 0x01, exactly 768 bytes:
+       Pixel data. Layout is PLANAR — R channel first, then G, then B.
+       (Empirically verified: bytes 0-200 always produced turquoise dot
+       when zeroed = R off; byte 215 produced magenta = G off.)
+
+### Frame buffer layout (partially mapped)
+
+The 768-byte buffer is split into 3 channel planes, each ~250 bytes.
+Within each plane, bytes map to pixels in a NON-RASTER order that follows
+the matrix's physical staircase / dimetric layout (rows shifted, top
+narrows to a triangular tip with cut/half pixels).
+
+Confirmed (col, row) positions for R-plane bytes (1-indexed; matrix is
+in PORTRAIT orientation, ~7 cols across × ~36 rows tall):
+
+  byte 0  -> (1, 1)      byte 1  -> (2, 1)
+  byte 2  -> (1, 2)      byte 3  -> (2, 2)
+  byte 4  -> (3, 1)      byte 5  -> (4, 1)
+  byte 6  -> (1, 3)      byte 7  -> (2, 3)
+  byte 8  -> (3, 2)      byte 9  -> (4, 2)
+  byte 10 -> (5, 1)
+  byte 14 -> (3, 3)
+  byte 100 -> (1, 7)     byte 200 -> (5, 9)     byte 215 -> (4, 10) [G]
+
+  byte 222 -> padding (no LED)
+  byte 230 -> padding
+  byte 255 -> padding
+  byte 767 -> padding
+
+The pattern is deterministic but non-trivial — looks like 2x2 super-pixel
+quads scanned in a staircase order, with quad bytes interleaved at
+non-contiguous positions in the buffer. Full LUT derivation requires
+either continuing the manual byte-by-byte test (too slow without
+automation) or photo-OCR (ROI per dot, brightness diff). Plenty of
+captured frames in `scratch/captures/matrix_apply.pcap` show real
+ASUS-rendered states (clock at known minutes) — those are the ground
+truth for any future LUT refinement.
+
+### What works in v0.2
+
+  - `polylux/drivers/anime_matrix/usb_direct.py` — production module
+  - `from polylux.drivers.anime_matrix.usb_direct import AniMeMatrix`
+  - `with AniMeMatrix.open() as m: m.fill(0xff); m.flush()` works live.
+  - `m.send_frame(captured_bytes)` replays any 768-byte frame from a
+    real-AC capture — full visual fidelity without needing the LUT.
+  - 39/39 unit tests passing.
+  - All ASUS daemons can crash / be killed and our driver still works.
+
+### What v0.2 ships as
+
+  - Direct USB control: ✓ (no UWP, no Helper, no Service, no LightingService
+    needed for the matrix path — we drive the chip ourselves).
+  - Frame replay (captured): ✓.
+  - Custom pixel-coord rendering (text/animation): blocked on LUT.
+  - Service integration (replace Frida-based force_color with usb_direct):
+    not wired in yet.
+  - Task Scheduler auto-start installer: already exists (commit c6f557f).
+
+### Next concrete steps
+
+1. Wire `usb_direct.AniMeMatrix` into `polylux/service/main.py` (replace
+   the v0.1 Frida MatrixForceColorDriver with a USB-based driver that
+   cycles a "Polylux is alive" frame on startup).
+2. Build a `frame_library.py` that loads captured frames from the pcap
+   and exposes them as named effects (e.g. clock_replay, all_bright).
+3. Write the LUT crawler (automated photo OCR from a USB camera, OR a
+   bisecting binary-encoded test that lights groups of pixels per their
+   row/col bit pattern so each test reveals 1 bit of position for every
+   byte simultaneously).
+4. Add `polylux.kill_asus_stack()` helper that stops AC + LightingService
+   + Aac3572MbHal so v0.2 can claim the device cleanly at startup.
+
 ## 8c. PEER-CHECK WALL — fresh-TCP path is dead (2026-05-10 afternoon)
 
 **Key finding that kills the original v0.2 "kill UWP" goal.**
@@ -742,6 +840,7 @@ Fix for production Polylux:
 | 2026-05-10 | Pure-Python crypto (path b) over Frida-RPC (path a) | Key extracts cleanly via BCryptExportKey "KeyDataBlob"; AES-256-GCM matches the captured cipher byte-perfect. Frida required only at service startup (key extraction), not the hot path. |
 | 2026-05-10 | Decline driver-level investigation for now | Strategy C just got 100 % validated; v0.2 is ~30 min from working. Driver RE was already rejected 2026-05-09 for cost + brick risk (§10b rule 2). Re-evaluate only if the ASUS daemon path breaks under a future update. |
 | 2026-05-10 | v0.2 scope pivot — drop "kill UWP" goal | Helper enforces a peer-process check after accept() (FIN at ~20ms, no bytes read). Cannot inject SetMatrixLED from a non-UWP peer. v0.2 = production-grade packaging of v0.1 (decrypt-substitute, auto-key-extract, auto-restart, Windows service). Full reasoning in §8c. |
+| 2026-05-10 | RE-PIVOT — direct USB attack at the chip layer | After §8c walls, Vlad redirected ("scriem noi driver-ul, ce pleacă de la mb la chip e fix; ASUS poate schimba mâine cheile dar firmware-ul nu"). USBPcap capture of a real Apply revealed protocol (HID prep + 768B bulk). pyusb + hidapi against WinUSB-bound mi_00/mi_01 works with zero ASUS daemons. v0.2 SHIPS as direct USB control. Full details in §8d. |
 
 ## 13. Reference paths
 

@@ -77,6 +77,55 @@ We hooked `BCryptEncrypt` / `BCryptDecrypt` with Frida and dumped
 plaintext. The Apply command is `Cmd='SetMatrixLED'` carrying the same
 fields as `current.json`. Full format documented in `PROJECT_STATE.md` §8.
 
+## 🎯 Where we are (2026-05-10 evening — v0.2 BREAKTHROUGH)
+
+**Polylux now drives the AniMe Matrix directly via USB, with zero ASUS
+daemons cooperation.** Full details in `PROJECT_STATE.md §8d`. Read that
+first.
+
+### Quick start to verify it still works
+
+```python
+from polylux.drivers.anime_matrix.usb_direct import AniMeMatrix
+with AniMeMatrix.open() as m:
+    m.fill(0xff)   # all pixels on
+    m.flush()      # send to chip — matrix lights up white
+```
+
+If that works, we own the matrix. If not, ASUS daemons reclaimed the
+device — kill them via PowerShell admin first:
+
+```
+Get-Process | Where-Object { $_.ProcessName -match 'Aac3572|LightingService|ArmouryCrate|asus_framework|ArmourySocketServer|ArmourySwAgent' } | Stop-Process -Force
+```
+
+### Known protocol (live verified)
+
+  USB:    VID 0x0B05 PID 0x1A21, WinUSB driver, 2 interfaces.
+  Frame:  HID Output Report iface 1 ep 0x02:
+            65B = [0xEC, 0x7F, 0x04, 0x00, 0x03] + 60 zeros
+          Then BULK OUT iface 0 ep 0x01: 768B pixel data
+            (R plane, G plane, B plane — planar layout).
+
+### Captured assets in scratch/captures/
+
+  matrix_apply.pcap  — USBPcap of real ArmouryCrate Apply session.
+                       Contains many 768-byte bulk frames showing the
+                       clock at various minutes. Replay-friendly with
+                       `m.send_frame(captured_bytes)` (no LUT needed).
+
+### Partial pixel mapping LUT (R-plane bytes)
+
+  byte 0 -> (1,1)   byte 1 -> (2,1)   byte 2 -> (1,2)   byte 3 -> (2,2)
+  byte 4 -> (3,1)   byte 5 -> (4,1)   byte 6 -> (1,3)   byte 7 -> (2,3)
+  byte 8 -> (3,2)   byte 9 -> (4,2)   byte 10 -> (5,1)
+  byte 14 -> (3,3)
+  byte 100 -> (1,7)  byte 200 -> (5,9)  byte 215 -> (4,10) [G plane]
+  byte 222, 230, 255, 767 -> padding
+
+Pattern is staircase-aware non-raster scan (likely 2x2 quads scattered).
+LUT crawler is the next big task.
+
 ## ⚡ Where we paused (2026-05-10 afternoon-late)
 
 **Vlad authorized full aggressive mode** — "il facem degeaba dacă nu scapăm de AC", "dacă se strică AC îl reinstalăm". Acceptăm risc de a sparge AC pentru progres.
