@@ -377,6 +377,64 @@ The plaintext envelope also carries:
 Approach (b) gives us a fully standalone Polylux. Approach (a) requires
 Frida always running. Either way: this is the next session's work.
 
+### 8a. UserSessionHelper uses WSASend, NOT send() — important capture gotcha
+
+**Lesson learned (2026-05-10 morning, parallel session):** UserSessionHelper
+sends outbound traffic via Windows IOCP / Boost::Asio, which calls
+`ws2_32.dll!WSASend` directly. Hooking only `ws2_32.dll!send` will see ZERO
+of the actual SetMatrixLED wire traffic. You'll only see background poll
+keepalives.
+
+The complete set of hooks that catches everything:
+
+| Function | Why |
+|---|---|
+| `ws2_32.dll!WSASend` | **Required.** All real outbound. Iterate WSABUF list. |
+| `ws2_32.dll!WSARecv` | All inbound IOCP recv. |
+| `ws2_32.dll!send` | Old-style sync sends. Rare but possible. |
+| `ws2_32.dll!recv` | Old-style sync recvs. |
+| `ws2_32.dll!connect` + `WSAConnect` | Identify which socket goes to which port. |
+| `kernel32.dll!WriteFile` | Last resort: some IOCP code uses socket handles as file handles. |
+| `bcrypt.dll!BCryptEncrypt` + `BCryptDecrypt` | Plaintext capture (we own this part). |
+
+**WSABUF struct on x64** (this layout bites people):
+
+```c
+typedef struct _WSABUF {
+    ULONG len;     // offset 0,  4 bytes
+    // 4 bytes implicit padding for pointer alignment
+    CHAR* buf;     // offset 8,  8 bytes
+} WSABUF;          // sizeof = 16
+```
+
+WSASend takes `LPWSABUF lpBuffers, DWORD cnt` — iterate `i = 0..cnt-1`,
+each entry at `lpBuffers + i*16`.
+
+**Correlation trick** (find the encrypted SetMatrixLED on the wire fast):
+
+After each `BCryptEncrypt`, stash the output buffer pointer. On each
+`WSASend`, check if any `WSABUF.buf == g_lastEncOut.cBuf` and the
+timestamp delta < 100ms. That's the wire frame for the just-encrypted
+ciphertext. Skip frames < 50 bytes that don't match (those are noise
+poll responses).
+
+**Ready-to-use capture script:** `scratch/frida_capture_v2.py`. It bakes
+in all the above. Usage:
+
+```
+python scratch/frida_capture_v2.py <UserSessionHelper PID> 60
+```
+
+Output JSONL in `scratch/captures/capture_v2_<timestamp>.jsonl`. Live
+console prints non-noise events with the `[matches enc#N addr+ts]`
+correlation tag where applicable.
+
+**Overlapped IO note:** WSASend with non-NULL `lpOverlapped` is async;
+the actual write completes via IOCP later. But the bytes are committed
+into the kernel send queue at WSASend call time — so onEnter capture
+of the WSABUF data is correct and complete. No need to hook
+GetQueuedCompletionStatus.
+
 ## 9. Next concrete steps (start here next session)
 
 1. **Capture real traffic.** With Armoury Crate running, start a WebSocket

@@ -3,6 +3,21 @@
 > Read `PROJECT_STATE.md` first, especially §8 which has the latest protocol
 > map. This file is the action-oriented start guide.
 
+## ⚠️ CRITICAL CAPTURE GOTCHA (added 2026-05-10 morning, parallel session learning)
+
+**UserSessionHelper sends via WSASend, NOT plain send().** If you only hook
+`ws2_32.dll!send` you'll see ZERO real wire traffic. You'll waste hours
+wondering "where did the SetMatrixLED bytes go?" (parallel session did).
+
+**Solution ready:** use `scratch/frida_capture_v2.py`. It hooks WSASend +
+WSARecv with correct WSABUF iteration (16-byte struct on x64 with implicit
+4-byte padding before the buf pointer at offset 8), correlates each
+WSASend buffer pointer against the most-recent BCryptEncrypt output
+pointer (within 100 ms), and filters noise frames < 50 bytes.
+
+See `PROJECT_STATE.md §8a` for full hook table + WSABUF layout + correlation
+algorithm. Don't reinvent this.
+
 ## Strategic context (decided 2026-05-10 morning chat)
 
 Polylux is also Vlad's **best realistic source of passive income**. Profile:
