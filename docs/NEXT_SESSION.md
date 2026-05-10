@@ -77,6 +77,73 @@ We hooked `BCryptEncrypt` / `BCryptDecrypt` with Frida and dumped
 plaintext. The Apply command is `Cmd='SetMatrixLED'` carrying the same
 fields as `current.json`. Full format documented in `PROJECT_STATE.md` §8.
 
+## ⚡ Where we paused (2026-05-10 afternoon-late)
+
+**Vlad authorized full aggressive mode** — "il facem degeaba dacă nu scapăm de AC", "dacă se strică AC îl reinstalăm". Acceptăm risc de a sparge AC pentru progres.
+
+### The chain we mapped this session
+
+UWP ArmouryCrate.exe (UI click)
+  → UserSessionHelper.exe :51100   (encrypted SetMatrixLED — peer-checked)
+  → ArmouryCrate.Service.exe :50100 (encrypted forward — peer-checked)
+  → LightingService.exe (writes XML cache files in C:\Program Files (x86)\LightingService\)
+  → ??? (unknown writer)
+  → matrix changes color
+
+We confirmed AURA_3.0 XML is the canonical matrix command, captured the
+exact format with all 3 textlist entries for [@HOUR][@IND][@MINUTE], and
+verified hue values match Vlad's clicks (0.666=blue, 0.166=yellow, 0=red).
+
+### What we proved DOES NOT work for v0.2 "kill UWP"
+
+- 51100 (Helper): peer-process-check, FIN at ~20ms (§8c)
+- 50100 (Service): same peer-check
+- 9013 (ArmourySocketServer): WS connects but never replies to JSON/XML
+- File-write to LedMatrix_LastScript.xml: no effect; cache only
+- Aac3572MbHal HID writes: only 2 unique 65-byte payloads despite 3 color
+  changes (heartbeat, not data)
+- AuraSdk COM (`{05921124-...}`): instantiates from regular user, but
+  Enumerate() returns 0 devices for ALL devType masks. Likely because
+  motherboard RGB is BIOS-disabled.
+- ASUSAuraMBHal COM (`{E7C8DA76-...}`): CoCreateInstance fails with
+  E_UNEXPECTED — AppID launch permission probably gates regular users.
+
+### Strongest live clues
+
+The matrix is on USB device `\\?\usb#vid_0b05&pid_1a21&mi_00#...` (the OLED
+Controller chip per §3 — AniMe Matrix is multiplexed on it). Aac3572MbHal_x86.exe
+opens this device 469 times during a 30s capture but its writes are constant
+(2 unique 65-byte HID payloads, prefix 0xec). Either:
+  - The actual data path is async/IOCP/WriteFileEx that my hooks miss
+  - A different process writes the matrix data (not yet identified)
+  - Service.exe ↔ MbHal channel uses encryption (strings ASUSAURAHALENCYPT,
+    ASUSAURAHALKEYCONTAINER found in MbHal binary)
+
+### Where to start when resuming
+
+Pick ONE of these next attacks (ordered by EV):
+
+1. **Hook ALL processes that have HID.dll loaded simultaneously** during a
+   matrix Apply. Whoever writes >100B to the device handle wins. Start with
+   Aac3572MbHal_x86 + LightingService + ArmouryCrate.Service + ROGLiveService.
+   Use NtWriteFile + NtDeviceIoControlFile + WriteFileEx (async path).
+
+2. **Try AuraDevelopement Class** (`{34B707DC-1133-4EBC-B380-21387A50A89D}`).
+   See `scratch/com_aurasdk_explore.py` for setup. May offer richer methods.
+
+3. **Hook MbHal_x86 with WriteFileEx + completion routines**. The 469
+   handle-opens to vid_0b05&pid_1a21 must be writing data SOMEWHERE. Async
+   IO is the most likely answer.
+
+4. **Strings/IDA on Aac3572MbHal_x86.exe** to find named-pipe / encrypted
+   IPC entry. Look for `ASUSAURAHALENCYPT` keys in code, find the IPC
+   server endpoint, Frida-fake messages to drive matrix.
+
+5. **Direct HID write from Polylux** to vid_0b05&pid_1a21. Capture a
+   complete Apply burst with enough breadth (NtWriteFile + WriteFileEx +
+   NtDeviceIoControlFile in MbHal during a fresh Apply), then replay
+   verbatim from Python via `hidapi`.
+
 ## First action when you resume
 
 DON'T REDO DISCOVERY. Read **§8c first** in `PROJECT_STATE.md` — it
