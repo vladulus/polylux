@@ -206,3 +206,9 @@ class RyujinLCD:
                     f"LCD bulk write incomplete at offset {offset}: "
                     f"{n}/{LCD_BULK_CHUNK}"
                 )
+
+        # Commit upload — switch active display from Hardware Monitor to
+        # Custom Image. On the chip 1A21 OLED, ec 73 ff was the switch
+        # (verified live), so try the same for Ryujin. If this doesn't
+        # work the LCD will keep showing HW monitor.
+        self.hid_write(bytes([0xEC, 0x73, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00]))

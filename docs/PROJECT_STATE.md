@@ -1,6 +1,8 @@
 # Polylux — Project State
 
-**Last updated:** 2026-05-10 (late evening — see §8e for matrix LUT completion + scope revision)
+**Last updated:** 2026-05-11 — see §9 for the full-protocol session
+(matrix init, OLED mode switching, Ryujin LCD upload, Aura RGB,
+Chip1A21 refactor)
 
 This document is the single source of truth for project state across sessions.
 Anyone (Claude or human) starting a new session should read this **first**, then
@@ -379,6 +381,198 @@ The plaintext envelope also carries:
 
 Approach (b) gives us a fully standalone Polylux. Approach (a) requires
 Frida always running. Either way: this is the next session's work.
+
+## 9. Full-protocol session (2026-05-11) — all four motherboard outputs working
+
+This session cracked the remaining protocol pieces for **all** four
+motherboard outputs (matrix, OLED, Ryujin LCD, Aura RGB). Polylux now
+drives matrix + OLED text simultaneously, standalone, with AC fully
+uninstalled. The architecture was refactored into clean dependency-
+injected drivers around a shared `Chip1A21` low-level transport.
+
+### 9.1 Matrix init secret (the missing "wake up" command)
+
+Without AC having run on the machine, the chip silently dropped frame
+writes. Captured the exact init AC sends at first launch in
+`scratch/captures/matrix_p1.pcap` (dev 7, t=0..1.7s + 83.32s):
+
+  t=0.000s  ec dc 00 00 00 00 00 00     heartbeat #1
+  t=0.556s  ec dc 00 00 00 00 00 00     heartbeat #2
+  t=1.116s  ec dc 00 00 00 00 00 00     heartbeat #3
+  t=1.683s  ec 82 00 00 00 00 00 00     control packet
+  t=83.32s  ec c1 00 00 00 00 00 00     frame companion
+  t=83.32s  **ec 42 01 00 00 00 00 00** ENABLE MATRIX DISPLAY MODE
+  t=83.33s  ec 7f 04 00 03 00 00 00     frame begin
+  t=83.39s  bulk 768B                   first pixel data
+
+`ec 42 01` appears EXACTLY ONCE per session. Polylux now sends it
+lazily on first `send_frame()` via `Chip1A21.init_for_matrix()`.
+
+Per-frame sequence also corrected: `ec c1 00` must be paired with
+`ec 7f 04 00 03` before every bulk write. Polylux had been skipping
+ec c1, which worked when AC kept the chip warm but failed after AC
+was uninstalled.
+
+### 9.2 OLED protocol fully decoded
+
+Three modes identified on chip 1A21 (gated by the `ec 51 NN` global
+mode-select prefix):
+
+  ec 51 09             text / Hardware Monitor mode (ec 53 text writes)
+  ec 51 10 01 01       Q-Code style numeric display (BIOS POST style)
+  ec 51 11             matrix preset display (factory animation slot)
+  ec 51 NN             other slot indices (TBD — chip has many presets)
+
+#### Text mode (ec 53)
+  65-byte HID Output Report. Already documented in §8e for matrix LUT,
+  refresher:
+    pos 0   = 0xEC
+    pos 1   = 0x53
+    pos 2   = 0x00
+    pos 3..20  = label  (ASCII, 18B max, null-padded)
+    pos 21..64 = value  (UTF-8, 44B max)
+
+  `LiveDashOLED.set_text()` automatically sends `ec 51 09` once per
+  instance so text rendering keeps working even after the chip was
+  left in image mode.
+
+#### Custom Image upload (ec 72 + ec 51 + ec 73 + ec 7f 02 + bulk)
+  Verified byte-for-byte against AC's pcap upload of a 1588B GIF87a
+  256×64 image. Wire sequence:
+
+    HID INT OUT 65B  ec 72 01 00 01 00 00 00        register upload
+    HID INT OUT 65B  ec 51 00 00 00 00 00 00        query / lock
+    HID INT OUT 65B  ec 73 01 00 00 00 00 00        start send
+    HID INT OUT 65B  ec 7f 02 sizeLO sizeHI 00 00 00   bulk prep with
+                                                       16-bit LE size
+    BULK OUT ep0x01  GIF87a bytes + zero pad to 4096B chunk
+
+  Upload completes USB-side. **Display activation TBD**: AC's pcap
+  shows `ec 73 ff` + `ec 51 10 01 01` after upload, but `ec 51 10 01 01`
+  switches OLED to Q-Code mode (not Custom Image mode). The specific
+  `ec 51 NN` for Custom Image activation needs a fresh targeted
+  capture (one Apply on Custom Image only, monitor live HID writes).
+
+### 9.3 Ryujin II LCD upload protocol (PID 0x1988)
+
+Decoded from `matrix_p1.pcap` dev 20 (358 bulk 4096B chunks containing
+GIF89a 320×240). Wire sequence:
+
+    HID INT OUT 65B  ec 71 01 01 00 00 00 00        switch to Custom Image mode
+    HID INT OUT 65B  ec f1 00 00 00 00 00 00        unknown control (always present)
+    HID INT OUT 65B  ec 72 01 02 01 00 00 00        register upload (byte 3 = 0x02 for LCD; 0x00 for OLED)
+    HID INT OUT 65B  ec 73 01 00 00 00 00 00        start send
+    HID INT OUT 65B  ec 7f 02 sLO sMID sHI 00 00 00   bulk prep with
+                                                       24-bit LE size
+    BULK OUT ep0x01  GIF89a bytes (320×240) + zero pad in 4096B chunks
+    HID INT OUT 65B  ec 73 ff 00 00 00 00 00        end / commit upload
+
+Display activation: same situation as OLED — bytes leave the host
+correctly but the LCD keeps showing its built-in hardware-monitor mode
+(Aac3572MbHal_x86.exe writes hardware-monitor data autonomously even
+without ROGLiveService running). Next session: capture a session where
+AC switches the LCD from hardware-monitor to a custom image, see what
+command flips that state.
+
+### 9.4 Aura RGB — protocol decoded but write blocked
+
+PID 0x18F3 "AURA LED Controller". HID Set_Report via Control endpoint
+(ep 0x00):
+
+    Setup: bmRT=0x21 bReq=0x09 wVal=0x0211 wIdx=0x0002 wLen=20
+
+Payload structure (20 bytes):
+    byte 0     = 0x11        Report ID
+    byte 1     = 0xff        marker
+    byte 2     = 0x0a        cmd (set zone colors)
+    byte 3     = chunk-type  0x1b/0x5b/0x7b/0x6b
+    bytes 4-19 = 16 bytes per-zone records
+
+Each chunk is a list of zone updates. Records are 4 bytes (`<zone_id>
+0xff <data1> <data2>`) in 0x1b chunks, 5 bytes in 0x5b chunks. 122
+distinct zone IDs identified, mostly 0x01..0x6f sequential.
+
+**Write blocked**: Windows HID stack is bound to iface 2; ctrl_transfer
+via libusb STALLs ("Pipe error"). Tested `hidapi.write` /
+`send_feature_report` / `pyusb.ctrl_transfer` — all rejected.
+
+Decision: **delegate to OpenRGB** via `openrgb-python` SDK client.
+OpenRGB has already reverse-engineered the proprietary protocol, is
+MIT-licensed, and supports Z690 Maximus Extreme + most RAM/GPU/AIO RGB
+hardware. New module: `polylux/drivers/aura_rgb/`. User installs
+OpenRGB separately and enables the SDK server; Polylux connects on
+127.0.0.1:6742. Documented in README.
+
+Also checked: Windows Dynamic Lighting requires LampArray (usage page
+0x59). Aura uses vendor-specific 0xFF72, so Windows native lighting
+APIs don't recognize it. OpenRGB is the cleanest path.
+
+### 9.5 Chip1A21 refactor (clean architecture)
+
+Carved out a shared low-level transport class so the matrix and OLED
+high-level drivers can share the chip without fighting over USB claims:
+
+  polylux/drivers/chip_1a21.py
+    Chip1A21        low-level: open/close, hid_write, bulk_write,
+                    init_for_matrix (lazy, idempotent)
+
+  polylux/drivers/anime_matrix/usb_direct.py
+    AniMeMatrix(chip)         high-level: send_frame, set_pixel, etc.
+    AniMeMatrix.open()        convenience: opens private chip
+
+  polylux/drivers/livedash_oled/driver.py
+    LiveDashOLED(chip)        high-level: set_text, upload_image
+    LiveDashOLED.open()       convenience: opens private chip
+    set_text() auto-sends ec 51 09 once per instance so text always
+                              works regardless of leftover mode state.
+
+For sessions that need both displays, callers open the chip
+explicitly and pass it to both wrappers (refcount-tracked):
+
+    with Chip1A21.open() as chip:
+        matrix = AniMeMatrix(chip)
+        oled = LiveDashOLED(chip)
+        matrix.send_frame(...)         # matrix lights up
+        oled.set_text(...)             # OLED text — both displays active
+
+Verified live: simultaneous matrix text "BOTH WORK" + OLED text
+"POLYLUX / SHARED CHIP".
+
+### 9.6 What still needs work for v0.2 SHIP
+
+  1. **Refactor `polylux/service/main.py`** to use the new drivers.
+     Replace `MatrixForceColorDriver` + `UsbForceColorDriver` with a
+     scene-based YAML config (matrix text / OLED text / RGB color
+     specified in polylux.yaml, with sensible defaults).
+
+  2. **kill_asus_stack()** helper that the service runs at startup so
+     it doesn't fight with leftover ASUS daemons.
+
+  3. **OLED Custom Image display activation** — fresh targeted pcap
+     of an isolated Apply on OLED Custom Image while monitoring HID
+     writes live (Frida hook ws2_32.WSASend would catch the moment).
+
+  4. **Ryujin LCD display activation** — same approach.
+
+  5. **Unit tests** for packet builders (build_text_packet,
+     build_image_prep_packets, matrix LUT) verified byte-for-byte
+     against captured AC packets in scratch/captures/.
+
+  6. **Installer touch** — scripts/install_service.py needs to know
+     about the new driver entry points.
+
+  7. **README** rewrite for public launch: what works, what's TBD,
+     install instructions, OpenRGB dependency note, donation links.
+
+### 9.7 Session commits
+
+  21591f1  font_3x5: add full uppercase alphabet (A-Z)
+  16891a9  [chip 1A21 refactor] Shared Chip1A21 driver + OLED mode-switch
+  ...      [matrix STANDALONE] Init sequence + per-frame ec c1
+  ...      [Ryujin LCD] Driver + upload protocol (display TBD)
+  ...      [aura_rgb] Delegate to OpenRGB via openrgb-python SDK client
+
+(See `git log --oneline` for the full session range; ~9 commits total.)
 
 ## 8e. AniMe Matrix LUT FULLY MAPPED + scope correction (2026-05-10 late evening)
 

@@ -1,8 +1,91 @@
 # Next session — pick up here
 
-> Read `PROJECT_STATE.md` **§8e first** for the latest state: AniMe Matrix
-> is fully mapped (LUT + render), and v0.2 scope was corrected to include
-> OLED + LCD + RGB (not matrix alone).
+> Read `PROJECT_STATE.md` **§9 first** — the 2026-05-11 session cracked
+> all four motherboard outputs' protocols. Matrix + OLED text work
+> standalone. OLED Custom Image and Ryujin LCD upload byte-correctly
+> but need one more pcap to find the "activate display" mode-switch.
+
+## TL;DR — what works as of 2026-05-11
+
+  - **AniMe Matrix:** full standalone (init secret `ec 42 01` baked
+    into driver). Render primitives + 3×5 font + image draw all work.
+  - **LiveDash OLED text:** full standalone (mode switch `ec 51 09`
+    baked into `set_text()`). Works simultaneously with matrix.
+  - **Aura RGB:** delegated to OpenRGB via `polylux.drivers.aura_rgb`.
+    User installs OpenRGB separately and enables SDK server.
+  - **OLED Custom Image upload:** protocol byte-perfect, but display
+    activation needs another pcap. Next-session work (see below).
+  - **Ryujin LCD upload:** same — protocol decoded, display activation
+    TBD.
+
+## First action when you resume
+
+1. **Refactor `polylux/service/main.py`** to use the new drivers
+   (Chip1A21 + AniMeMatrix + LiveDashOLED + RyujinLCD + AuraRGB).
+   Drop the old `MatrixForceColorDriver` / `UsbForceColorDriver`.
+   Define a scene-based YAML config:
+
+     matrix:
+       enabled: true
+       scene: clock                # or "text" / "image" / "fill"
+       color: [255, 255, 255]
+       text: "12:34"
+     oled:
+       enabled: true
+       label: "CPU Temp."
+       value_source: cpu_temp      # poll psutil/wmi for value
+     ryujin_lcd:
+       enabled: true
+       scene: hardware_monitor      # or "custom_image"
+       image: "path/to/anim.gif"
+     aura_rgb:
+       enabled: false              # requires OpenRGB SDK server
+       color: [0, 0, 255]
+
+2. **`kill_asus_stack()` helper** that the service runs at startup
+   so ASUS daemons can't fight for the USB device.
+
+3. **Unit tests** in `tests/`:
+     test_chip_1a21.py  — packet builders byte-for-byte vs pcap
+     test_anime_matrix_lut.py — coord ↔ byte mapping
+     test_livedash_oled.py — build_text_packet,
+                              build_image_prep_packets
+     test_ryujin_lcd.py — size encoding (24-bit LE)
+
+4. **Pcap targeted for OLED Custom Image / Ryujin LCD display
+   activation** — Vlad does ONE Apply on Custom Image in AC while
+   USBPcap captures, no other UI navigation. Look for what `ec 51 NN`
+   command lands between upload and visible display.
+
+5. **Installer + auto-start** — `scripts/install_service.py` needs to
+   handle new driver names; nssm-based Windows service.
+
+6. **README rewrite** for v0.4 public launch — "what works,
+   installation, OpenRGB dependency, donate".
+
+## What Vlad does
+
+  - Brings up AC and clicks Apply on the specific feature being
+    captured. Same procedure as 2026-05-11 session.
+  - Visually confirms displays match what Polylux sends.
+
+## Captures already on disk
+
+  scratch/captures/matrix_p1.pcap           33 MB — matrix Apply
+                                                    on cold-boot AC
+  scratch/captures/oled_custom_p1.pcap      64 MB — failed OLED Custom
+                                                    upload (chip
+                                                    actually contains
+                                                    Aura RGB traffic)
+  scratch/captures/full_init_p1.pcap        19 MB — AC install +
+                                                    Ryujin preset Apply
+  scratch/captures/full_init_p1_v2.pcap     51 MB — post-reboot init +
+                                                    OLED Apply
+
+(Old content below this line predates the 2026-05-10/11 sessions.
+Most superseded by §9 in PROJECT_STATE.md.)
+
+---
 
 ## TL;DR
 
