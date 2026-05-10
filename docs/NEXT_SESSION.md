@@ -3,6 +3,36 @@
 > Read `PROJECT_STATE.md` first, especially §8 which has the latest protocol
 > map. This file is the action-oriented start guide.
 
+## Strategic context (decided 2026-05-10 morning chat)
+
+Polylux is also Vlad's **best realistic source of passive income**. Profile:
+50yo UK resident, owns home outright (mom's gift), no monthly surplus,
+runs multiple solo businesses but doesn't like sales/marketing. Polylux
+fits perfectly because:
+  - Real demand (millions of ASUS ROG users hate Armoury Crate)
+  - No comparable free open-source alternative
+  - Distribution organic (GitHub + Reddit posts on r/ASUS, r/AsusROG, HN)
+  - Donation-friendly audience (gamers spend on hardware, will donate $5/mo)
+  - Tech moat (we cracked the protocol; competitors will take months to catch up)
+  - No customer-support burden like SaaS
+
+**Monetization roadmap**:
+  - v0.2 (next 1-2 sessions): standalone TCP client, kill UWP UI dependency, brag about -290MB RAM win
+  - v0.3 (1-2 weeks): OLED + Ryujin LCD support (Vlad's original Aura Blue + GPU temp idea)
+  - v0.4 (PUBLIC LAUNCH): polished README with before/after screenshots,
+    60-sec demo video, comparison vs Armoury Crate / SignalRGB,
+    GitHub Sponsors + Buy Me a Coffee + Ko-fi links, posts on
+    r/ASUS, r/AsusROG, r/buildapc, Hacker News, ROG forum, eventually
+    MSI installer for non-tech users
+
+**Realistic income trajectory**:
+  - Month 1-3 post-launch: 10-50 stars, 0-5 donors, $0-50/mo
+  - Month 6-12: 500-2000 stars, 50-200 donors, $200-1000/mo
+  - Year 2: potentially $1000-5000/mo if maintained
+  - Cap (de facto Armoury Crate replacement): $10k+/mo + Pro version + OEM consulting
+
+This drives next-session priorities: ship v0.2 fast, then v0.3, then PUBLIC.
+
 ## ⚡ PROOF: replay accepted at wire level
 
 In commit `ad6cbd8` we proved that ArmouryCrate.Service does NOT have
