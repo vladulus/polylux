@@ -415,8 +415,26 @@ de AC nu am făcut nimic"). Strategy C is dead; we now own the matrix.
 
 The 768-byte buffer is split into 3 channel planes, each ~250 bytes.
 Within each plane, bytes map to pixels in a NON-RASTER order that follows
-the matrix's physical staircase / dimetric layout (rows shifted, top
-narrows to a triangular tip with cut/half pixels).
+the matrix's physical staircase / dimetric layout.
+
+**Matrix physical shape (verified by Vlad 2026-05-10 evening):**
+TWO staircases, not one. Top has 3 cut/half pixels at the narrow tip,
+gradual widening downward. Bottom is the MIRROR — narrows again with
+a stair at the bottom edge. Middle section is full 7-col width.
+
+Approximate counts:
+  - Top stair (widening 1,2,3,...7 cols across rows):     ~28 LEDs
+  - Middle full (7 cols × ~28 rows):                      ~196 LEDs
+  - Bottom stair (narrowing 7,6,5,...1):                  ~28 LEDs
+  - Total visible:                                        ~250-256 LEDs
+                                                          (matches one
+                                                          channel plane)
+
+So a "row" in Vlad's coords (col, row) lands somewhere along the long
+PORTRAIT axis. Top rows have only cols 1-2 visible, middle rows have
+cols 1-7, bottom rows narrow back. The buffer has padding for
+non-existent (col, row) positions in stair regions — that's why bytes
+14, 15, 222, 230, 255, 767 are "nicăieri" (no LED).
 
 Confirmed (col, row) positions for R-plane bytes (1-indexed; matrix is
 in PORTRAIT orientation, ~7 cols across × ~36 rows tall):
