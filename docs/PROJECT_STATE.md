@@ -380,6 +380,83 @@ The plaintext envelope also carries:
 Approach (b) gives us a fully standalone Polylux. Approach (a) requires
 Frida always running. Either way: this is the next session's work.
 
+## 8c. PEER-CHECK WALL — fresh-TCP path is dead (2026-05-10 afternoon)
+
+**Key finding that kills the original v0.2 "kill UWP" goal.**
+
+`UserSessionHelper.exe` does a peer-identity check on every accepted TCP
+socket on port 51100. A non-UWP peer is silently disconnected with a clean
+FIN ~20 ms after accept(), without reading any bytes.
+
+### Reproduction
+
+`scratch/frida_capture_from_birth.py` was used to capture a fresh
+UWP→Helper connection from process birth (after Vlad stopped the entire
+AC stack and restarted via Services.msc + tray Exit). Two key
+observations:
+
+1. The first UWP message after connect is just `Cmd: GetUserPreferLanguageInUsersession`
+   wrapped in the standard envelope (Area=2, Feature=1, Name=AuraPlugin,
+   Number=GUID, Security=0x80, Version). No on-wire authentication step.
+   `seq` starts at 2.
+2. `BCryptEncrypt` and `BCryptDecrypt` use the SAME key handle. One
+   symmetric key per Helper process, not per direction
+   (verified by `scratch/compare_bcrypt_handles.py`: 60 enc + 140 dec
+   events, all on handle `0x266ace04e50`).
+
+Two replay attempts then failed with `WinError 10054 / RST`:
+  - `scratch/replay_setmatrixled.py` — 7-chunk SetMatrixLED with seq=1, 706
+  - `scratch/replay_first_probe.py` — verbatim copy of UWP's first probe
+    message (`GetUserPreferLanguageInUsersession`) with the freshly
+    extracted current-process key
+
+Final test (no send at all):
+
+```
+sock = socket.create_connection(('127.0.0.1', 51100))
+sock.recv(4096)   # blocks; recv() returns 0 after 20 ms (FIN)
+```
+
+→ Helper closed the connection cleanly within ~20 ms WITHOUT reading any
+bytes. Conclusion: Helper checks the connecting peer's process token
+(probably via `GetExtendedTcpTable` + `OpenProcess`, possibly a
+UWP/AppContainer SID match) right after accept and drops non-UWP peers.
+
+### What this rules out
+
+- "Open our own TCP and inject SetMatrixLED" — dead, regardless of
+  protocol details.
+- Pivoting to ArmouryCrate.Service:50100 — same Windows-process-identity
+  trick is almost certainly enforced there too (Service runs in session 0
+  as SYSTEM and would be even stricter).
+
+### What still works
+
+- `polylux.crypto.AuraCipher` + `polylux.wire.frame` — useful for passive
+  decryption of UWP traffic (debugging, future passive observability).
+- `polylux.crypto.extract_key` — extracts the runtime key cleanly.
+- `polylux.drivers.anime_matrix.force_color` — v0.1 path: Frida hooks
+  `BCryptDecrypt` and rewrites plaintext post-decrypt. THIS IS THE ONLY
+  PATH THAT DRIVES HARDWARE WITHOUT UWP-PEER COOPERATION.
+
+### Realistic ways to break the wall (future work)
+
+1. **Frida-inject into UWP itself** — make ArmouryCrate.exe call
+   `BCryptEncrypt` + `WSASend` for our SetMatrixLED. Same wire as today's
+   UI. Doesn't kill UWP but would let Polylux be the source of truth.
+2. **Process-spoof** — make Polylux's own connection appear to come from
+   ArmouryCrate.exe to Helper. Tricky and likely not portable.
+3. **Drop to USB** — out of scope per §10b rule 2 unless the daemon path
+   breaks under a future ASUS update.
+
+### Implication for v0.2 scope
+
+The "kill UWP, save 290 MB RAM" pitch is dead. v0.2 ships as a
+production-ready packaging of v0.1: the existing decrypt-substitute path,
+auto-extracted key, auto-restart on Helper PID change, install as Windows
+service. The crypto + wire modules become foundation for v0.3 work
+(passive monitoring, perhaps Frida-inject-into-UWP).
+
 ## 8b. v0.2 progress (2026-05-10 afternoon, commits 2dafb99 / f67d756)
 
 Two of the §8 "blockers" are dead. Cipher and wire format are fully solved
@@ -664,6 +741,7 @@ Fix for production Polylux:
 | 2026-05-09 | Strategy C locked in | Use ArmourySocketServer + LightingService as backend. Replace only the UI bloat. ~80 % bloat eliminated. |
 | 2026-05-10 | Pure-Python crypto (path b) over Frida-RPC (path a) | Key extracts cleanly via BCryptExportKey "KeyDataBlob"; AES-256-GCM matches the captured cipher byte-perfect. Frida required only at service startup (key extraction), not the hot path. |
 | 2026-05-10 | Decline driver-level investigation for now | Strategy C just got 100 % validated; v0.2 is ~30 min from working. Driver RE was already rejected 2026-05-09 for cost + brick risk (§10b rule 2). Re-evaluate only if the ASUS daemon path breaks under a future update. |
+| 2026-05-10 | v0.2 scope pivot — drop "kill UWP" goal | Helper enforces a peer-process check after accept() (FIN at ~20ms, no bytes read). Cannot inject SetMatrixLED from a non-UWP peer. v0.2 = production-grade packaging of v0.1 (decrypt-substitute, auto-key-extract, auto-restart, Windows service). Full reasoning in §8c. |
 
 ## 13. Reference paths
 

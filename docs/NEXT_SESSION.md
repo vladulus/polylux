@@ -79,53 +79,56 @@ fields as `current.json`. Full format documented in `PROJECT_STATE.md` §8.
 
 ## First action when you resume
 
-DON'T REDO DISCOVERY. Read `PROJECT_STATE.md` §8 (protocol spec) and §8b
-(v0.2 progress as of 2026-05-10 afternoon). The cipher, wire framing, and
-the Frida capture pattern are all solved.
+DON'T REDO DISCOVERY. Read **§8c first** in `PROJECT_STATE.md` — it
+documents the peer-process-check wall that killed the original v0.2
+"standalone TCP" plan. Then §8b for what crypto/wire infrastructure is
+already in place.
 
-**v0.2 state going into the next stretch:**
+**Context as of 2026-05-10 afternoon:**
 
-  - AES-256-GCM, key extracted via `BCryptExportKey` "KeyDataBlob"
-    — `polylux/crypto/aura_gcm.py`, validated against live capture
-  - Wire frame `[u32 length][12B nonce][N B ct][16B tag]`
-    — `polylux/wire/frame.py`, validated against live wire bytes
-  - End-to-end pipeline (`AuraCipher.encrypt` → `pack_frame`) byte-matches
-    UserSessionHelper's outbound WSASend on the same socket — see
-    `scratch/frida_capture_outbound_paired.py`
-  - Capture script for real Apply bursts: `scratch/frida_capture_v2.py`
-    (uses WSASend hooks + buffer-address correlation; see §8a)
+  - Crypto + wire format fully solved in pure Python, validated against
+    live captures (`polylux/crypto/aura_gcm.py`, `polylux/wire/frame.py`,
+    `polylux/crypto/key_extractor.py`).
+  - Helper enforces peer-process identity check after accept() —
+    fresh-TCP from a non-UWP peer is dropped at ~20 ms with no bytes
+    read. v0.1's decrypt-substitute remains the only path that drives
+    hardware without UWP cooperation.
+  - v0.2 scope pivoted: ship a production-grade packaging of v0.1.
 
-**Next concrete steps for v0.2 (no UWP):**
+**Next concrete steps for v0.2 (revised):**
 
-1. **`polylux/crypto/key_extractor.py`** — clean Frida wrapper that
-   attaches to UserSessionHelper, grabs the key handle from
-   `BCryptEncrypt.args[0]` on the first call, calls `BCryptExportKey`
-   "KeyDataBlob", parses out the 32-byte AES key, detaches. Returns
-   `bytes`. Service calls this once at startup.
+1. **Integrate `extract_key` into the live service** — even though the
+   key isn't strictly needed for decrypt-substitute (we mutate plaintext
+   post-`BCryptDecrypt`), having it in hand lets us add live monitoring
+   later. Optional: log it on startup so we can passively decrypt for
+   diagnostics.
 
-2. **Capture a real SetMatrixLED Apply** with `frida_capture_v2.py` while
-   Vlad clicks Apply in UWP. Save plaintext + wire frames. Count the chunks
-   per logical message (header chunk, length chunk, body chunks). That
-   gives us the spec for building outbound messages.
+2. **Fix the OVERFLOW desync gotcha** documented in §10b. When force-color
+   refuses an overflow, log a warning so users know to restart AC if
+   matrix stops responding. Better: pre-pad the captured plaintext to a
+   safe length so overflows can't happen.
 
-3. **TCP client** — open socket to `127.0.0.1:51100`. Try sending the
-   captured Apply bytes verbatim (replay). If accepted, matrix changes
-   color → §8a's commit `ad6cbd8` already proved replay works at wire
-   level, so this should be straightforward.
+3. **Auto-restart on Helper PID change** — `MatrixForceColorDriver.run_forever`
+   already polls and re-attaches; verify it's robust across actual AC
+   restarts (Vlad's stop+start cycle is a real test case).
 
-4. **Mutate + send** — change `TextColorR/G/B` in the captured plaintext,
-   re-encrypt with `AuraCipher`, re-frame, send. Smoke test:
-   `force_color(255, 0, 0)` on a closed UWP. Vlad confirms.
+4. **Windows service installer** — wrap `python -m polylux.service` with
+   `nssm` or `pywin32`'s service framework so it auto-starts at boot,
+   runs hidden, restarts on crash. Add an installer script.
 
-5. **If port 51100 rejects fresh clients** (session-key handshake required),
-   fallback is to hijack UWP's existing socket from inside Frida — we're
-   already attached for key extraction, so calling `send()`/`WSASend` from
-   inside the helper process is essentially free.
+5. **Tray icon** (optional) — minimal pystray icon for status + manual
+   stop. Not in v0.2 scope unless quick.
 
-6. **Kill UWP + helper after smoke test passes**, run only Polylux service,
-   measure the RAM win.
+6. **README + screenshots** — for v0.4 public launch later. Skip for v0.2.
 
-**After v0.2 ships**: §8c will be added with v0.3 plan (Ryujin LCD).
+**For v0.3+ (parallel work, optional):**
+
+  - Frida-inject Polylux into ArmouryCrate.exe (UWP) — the only feasible
+    way to inject fresh SetMatrixLED from outside. Lets Polylux drive the
+    matrix without UI clicks while UWP runs in background.
+  - Ryujin LCD via the same decrypt-substitute pattern (capture an LCD
+    Apply, mutate fields).
+  - LiveDash OLED similarly.
 
 ## What Vlad does
 
