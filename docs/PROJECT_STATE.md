@@ -413,15 +413,34 @@ Per-frame sequence also corrected: `ec c1 00` must be paired with
 ec c1, which worked when AC kept the chip warm but failed after AC
 was uninstalled.
 
-### 9.2 OLED protocol fully decoded
+### 9.2 OLED + chip mode model
 
-Three modes identified on chip 1A21 (gated by the `ec 51 NN` global
-mode-select prefix):
+**Critical insight discovered in the final hour of the session**:
+`ec 51 NN` is a **chip-global mode switch**, not just an OLED switch.
+Setting any preset slot puts the entire chip into that preset and
+suppresses data-input writes (both matrix bulk and OLED text):
 
-  ec 51 09             text / Hardware Monitor mode (ec 53 text writes)
-  ec 51 10 01 01       Q-Code style numeric display (BIOS POST style)
-  ec 51 11             matrix preset display (factory animation slot)
-  ec 51 NN             other slot indices (TBD — chip has many presets)
+  ec 51 00             OLED Hardware Monitor (text mode, equiv to 0x09)
+  ec 51 01             OLED Q-Code numeric display (boot code style)
+  ec 51 02-05          matrix preset animation slots
+  ec 51 09             OLED text/HW Monitor mode (same as 0x00 family)
+  ec 51 0a-0f          (variants tested — TBD)
+  ec 51 10 01 01       OLED Q-Code mode with extra params
+  ec 51 11             matrix preset slot
+  ec 51 NN             other slot indices (chip has many factory presets)
+
+The data-input mode (`ec 42 01` for matrix, `ec 53` writes for OLED
+text) is itself a "slot" of sorts. To recover matrix + OLED data-mode
+after a preset has been activated:
+
+    chip._initialized = False
+    chip.init_for_matrix()       # re-sends ec dc + ec 82 + ec c1 + ec 42 01
+    matrix.clear(); matrix.flush()
+    oled.set_text(...)            # sends ec 51 09 again
+
+The way AC keeps both displays "live" during normal operation: it
+stays in data-input mode and only switches to preset slots when the
+user explicitly selects one in the UI. Polylux should do the same.
 
 #### Text mode (ec 53)
   65-byte HID Output Report. Already documented in §8e for matrix LUT,
