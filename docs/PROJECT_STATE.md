@@ -583,8 +583,7 @@ user explicitly selects one in the UI. Polylux should do the same.
   left in image mode.
 
 #### Custom Image upload (ec 72 + ec 51 + ec 73 + ec 7f 02 + bulk)
-  Verified byte-for-byte against AC's pcap upload of a 1588B GIF87a
-  256×64 image. Wire sequence:
+  Wire sequence (decoded from `full_init_p1_v2.pcap`):
 
     HID INT OUT 65B  ec 72 01 00 01 00 00 00        register upload
     HID INT OUT 65B  ec 51 00 00 00 00 00 00        query / lock
@@ -592,12 +591,42 @@ user explicitly selects one in the UI. Polylux should do the same.
     HID INT OUT 65B  ec 7f 02 sizeLO sizeHI 00 00 00   bulk prep with
                                                        16-bit LE size
     BULK OUT ep0x01  GIF87a bytes + zero pad to 4096B chunk
+    HID INT OUT 65B  ec 73 ff 00 00 00 00 00        end / commit
 
-  Upload completes USB-side. **Display activation TBD**: AC's pcap
-  shows `ec 73 ff` + `ec 51 10 01 01` after upload, but `ec 51 10 01 01`
-  switches OLED to Q-Code mode (not Custom Image mode). The specific
-  `ec 51 NN` for Custom Image activation needs a fresh targeted
-  capture (one Apply on Custom Image only, monitor live HID writes).
+  Upload completes USB-side without errors.
+
+  **Custom Image display activation — BLOCKED by ASUS firmware bug on
+  Z690 Extreme** (verified 2026-05-12 with Vlad):
+
+  - Tested every plausible activation: `ec 51 10` with sub-bytes
+    (00 00, 01 01, 02 02, ...), `ec 5c 01 01`, `ec 5d 01 01`,
+    `ec 71 01 01`, `ec af 01 01`, slot sweep 0x16..0x24. Result:
+    `ec 51 10 01 01` is Q-Code mode (CONFIRMED, supersedes earlier
+    misidentification); no slot or sub-byte combination activates
+    the uploaded image content. Display either stays in Q-Code or
+    goes black.
+  - **AC itself fails identically**: Vlad confirmed that when he
+    clicks Apply on OLED Custom Image in Armoury Crate's own UI on
+    this motherboard, OLED also shows black. This is not a Polylux
+    limitation — the chip firmware silently rejects the displayed
+    custom image regardless of which userland app sends it.
+  - ROG forum thread "Z690 Extreme OLED issue" (m-p/912971) and
+    cross-board discussion confirms: this is a known firmware bug on
+    Z690 Extreme that ASUS has not patched. On the previous-gen Z490
+    Extreme, the analogous bug took ~6 months for ASUS to fix via a
+    BIOS update that flashed updated chip firmware.
+
+  Sources:
+    https://rog-forum.asus.com/t5/armoury-crate/z690-extreme-oled-issue/m-p/912971
+    https://rog-forum.asus.com/t5/asus-software/armoury-crate-turn-off-livedash-oled/m-p/860938
+    https://rog-forum.asus.com/t5/asus-software/livedash-custom-image-animation-info-needed/td-p/807615
+
+  **Polylux scope decision**: keep upload protocol implemented in
+  driver (byte-correct, ready for the day firmware is fixed) but
+  treat Custom Image display as a documented "feature blocked by
+  ASUS firmware bug, same as AC". v0.3+ research direction: extract
+  the BIOS image (FPT.exe) and analyze the chip-firmware blob inside
+  — that's where the bug lives.
 
 ### 9.3 Ryujin II LCD upload protocol (PID 0x1988)
 
@@ -1371,6 +1400,7 @@ Fix for production Polylux:
 | 2026-05-09 | Use Aura Blue GIF (not the cosmic explosion one) | Already square (498×498), has a dark hollow center perfect for stats overlay. |
 | 2026-05-09 | Non-uniform scale GIF to LCD aspect, NO crop | Vlad's preference; smoke/aura is organic enough that distortion is invisible. |
 | 2026-05-09 | RGB = leave off (BIOS-disabled), don't build a controller | Vlad doesn't like lights. Removed from v1 scope. |
+| 2026-05-12 | Correct "BIOS-disabled" reasoning | Vlad clarified: BIOS RGB toggle is a default state, AC can still drive the Aura chip at runtime regardless. OpenRGB has the same capability — talks direct to chip. So RGB is NOT permanently disabled by BIOS; it's just "off by default" until a userland app enables it. Polylux via OpenRGB will work even on systems where user has BIOS RGB toggled off. Vlad still doesn't want LEDs on his own PC, but the integration must work for other users. |
 | 2026-05-09 | Reject slideshow-via-drive-letter approach | Ryujin doesn't mount as a Windows volume. |
 | 2026-05-09 | Reject pure ctypes-on-SDK-DLL approach | DLLs are 7-export plugin shims (`ExecuteFunction` dispatcher). They need ArmourySocketServer running anyway. The WebSocket route is cleaner. |
 | 2026-05-09 | Reject pure USB protocol RE | Estimated 1–2 days per device. Strategy C (use existing services) gets us to first frame in hours. |
