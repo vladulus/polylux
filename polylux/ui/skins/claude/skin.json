@@ -1,0 +1,42 @@
+{
+  "name": "Claude",
+  "author": "Claude",
+  "description": "Default Polylux skin — dark, minimal, Claude orange accent.",
+  "version": "1.0",
+
+  "window": {
+    "width": 760,
+    "height": 480,
+    "frameless": true,
+    "always_on_top_available": true
+  },
+
+  "colors": {
+    "bg": "#1a1a1a",
+    "bg_alt": "#222222",
+    "surface": "#2a2a2a",
+    "border": "#3a3a3a",
+    "text": "#e6e6e6",
+    "text_dim": "#888888",
+    "accent": "#C15F3C",
+    "accent_dim": "#7a3d27",
+    "ok": "#4caf50",
+    "warn": "#ffa726",
+    "err": "#ef5350"
+  },
+
+  "fonts": {
+    "header": ["JetBrains Mono", "Consolas", "monospace"],
+    "body":   ["Inter", "Segoe UI", "sans-serif"],
+    "header_size_px": 18,
+    "body_size_px": 14,
+    "mono_size_px": 13
+  },
+
+  "layout": {
+    "padding": 18,
+    "row_gap": 12,
+    "border_radius_px": 10,
+    "titlebar_height": 44
+  }
+}
