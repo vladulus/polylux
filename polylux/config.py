@@ -85,7 +85,7 @@ class OledConfig:
     update_seconds: float = 2.0
     preset_index: int = 0            # used when scene=preset_gif
 
-    SCENES = ("hardware_monitor", "text", "qcode", "preset_gif", "off")
+    SCENES = ("hardware_monitor", "text", "preset_gif", "off")
     VALUE_SOURCES = ("cpu_temp", "gpu_temp", "cpu_pct", "mem_pct", "static")
 
     def validate(self) -> None:
@@ -114,6 +114,9 @@ class AuraRGBConfig:
     color: RGB = (0, 0, 0)
     host: str = "127.0.0.1"
     port: int = 6742
+    # Default safe: only touch motherboard. Users opt in to keyboards
+    # / mice / etc by adding their type names here.
+    types: tuple[str, ...] = ("MOTHERBOARD",)
 
     SCENES = ("solid", "off")
 
@@ -189,6 +192,8 @@ def load(path: str | Path = DEFAULT_CONFIG_PATH) -> PolyluxConfig:
         cfg.aura_rgb.color = _coerce_color(a["color"])
     cfg.aura_rgb.host = str(a.get("host", cfg.aura_rgb.host))
     cfg.aura_rgb.port = int(a.get("port", cfg.aura_rgb.port))
+    if "types" in a and isinstance(a["types"], list):
+        cfg.aura_rgb.types = tuple(str(t).upper() for t in a["types"])
 
     cfg.validate()
     return cfg

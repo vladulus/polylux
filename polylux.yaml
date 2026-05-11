@@ -12,7 +12,7 @@ matrix:
   update_seconds: 1.0
 oled:
   enabled: true
-  scene: hardware_monitor
+  scene: 'off'
   label: CPU Load
   value: ''
   value_source: cpu_pct
@@ -22,11 +22,13 @@ ryujin_lcd:
   enabled: false
   scene: hardware_monitor
 aura_rgb:
-  enabled: false
-  scene: 'off'
+  enabled: true
+  scene: solid
   color:
   - 0
-  - 0
+  - 100
   - 255
   host: 127.0.0.1
   port: 6742
+  types:
+  - MOTHERBOARD

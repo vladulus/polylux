@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QAction, QIcon, QPainter, QPixmap, QColor, QFont
+from PyQt6.QtGui import QAction, QIcon, QPainter, QPixmap, QColor, QFont, QFontDatabase
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 
 from polylux.ui.skin import load_skin
@@ -59,6 +59,12 @@ class PolyluxApp:
         self._skin = load_skin(skin_name)
         self._app = QApplication.instance() or QApplication(sys.argv)
         self._app.setQuitOnLastWindowClosed(False)
+        # Set a sane application-wide default font so widgets without
+        # explicit font-size in QSS don't inherit point-size -1.
+        default_font = QFont(self._skin.font_family("body"), self._skin.font_size("body"))
+        if default_font.pointSize() <= 0:
+            default_font.setPointSize(10)
+        self._app.setFont(default_font)
         self._window = PolyluxWindow(state=state, skin=self._skin)
         self._tray = self._build_tray()
 

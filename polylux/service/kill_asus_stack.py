@@ -91,32 +91,57 @@ def kill_processes(names: Iterable[str] = ASUS_PROCESSES) -> dict[str, bool]:
     return results
 
 
+def _services_running(names: Iterable[str]) -> list[str]:
+    """Return names of services that are currently Running. Read-only,
+    no admin required. Names not found on the system are skipped."""
+    names = list(names)
+    name_list = ",".join(names)
+    script = (
+        f"Get-Service -Name {name_list} -ErrorAction SilentlyContinue "
+        f"| Where-Object {{ $_.Status -eq 'Running' }} "
+        f"| ForEach-Object {{ $_.Name }}"
+    )
+    proc = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Command", script],
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        return []
+    return [n.strip() for n in proc.stdout.splitlines() if n.strip()]
+
+
 def stop_services(names: Iterable[str] = ASUS_SERVICES,
                   set_manual: bool = True,
                   elevate_if_needed: bool = True) -> bool:
     """Stop ASUS Windows services so they don't respawn Aac3572MbHal etc.
 
+    Pre-check: if no target service is currently Running, no-op (no UAC).
+
     Args:
       names: services to stop.
-      set_manual: also set their start type to Manual (so they don't
-                  auto-start on next boot). Reversible: user can
-                  re-enable manually via services.msc or sc.exe.
-      elevate_if_needed: if direct Stop-Service fails (access denied),
-                  trigger UAC elevation via Start-Process -Verb RunAs.
-                  This prompts the user once.
+      set_manual: also set their start type to Manual.
+      elevate_if_needed: trigger UAC via Start-Process -Verb RunAs.
 
-    Returns True if at least one service was stopped successfully.
+    Returns True if services were already stopped or successfully stopped.
     """
+    names = list(names)
+    running = _services_running(names)
+    if not running:
+        log.info("ASUS services already stopped — no UAC needed.")
+        return True
+    log.info("Running ASUS services that need stopping: %s", ", ".join(running))
+
     name_list = ",".join(names)
-    script = (
-        f"Stop-Service -Name {name_list} -Force -ErrorAction Continue; "
-        + (f"foreach (\\$n in '{','.join(names)}'.Split(',')) "
-           "{ Set-Service \\$n -StartupType Manual -ErrorAction SilentlyContinue }"
-           if set_manual else "")
-    )
+    direct_script = f"Stop-Service -Name {name_list} -Force -ErrorAction Continue"
+    if set_manual:
+        manual_lines = " ; ".join(
+            f"Set-Service {n} -StartupType Manual -ErrorAction SilentlyContinue"
+            for n in names
+        )
+        direct_script += f" ; {manual_lines}"
 
     proc = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-Command", script],
+        ["powershell.exe", "-NoProfile", "-Command", direct_script],
         capture_output=True, text=True,
     )
     direct_ok = proc.returncode == 0 and "Cannot open" not in proc.stderr
@@ -129,18 +154,43 @@ def stop_services(names: Iterable[str] = ASUS_SERVICES,
         return False
 
     log.info("Direct Stop-Service blocked. Triggering UAC elevation...")
-    elevated_script = script + "; Start-Sleep 1"
-    elevation = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-Command",
-         f"Start-Process -Verb RunAs -Wait powershell -ArgumentList "
-         f"'-NoProfile','-Command','{elevated_script}'"],
-        capture_output=True, text=True,
+
+    # Write the elevated script to a temp .ps1 file — avoids the
+    # quoting hell of passing a multi-statement script through
+    # nested PowerShell invocations.
+    import tempfile
+    elevated_body = direct_script + "\nStart-Sleep -Seconds 2\n"
+    tf = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".ps1", delete=False, encoding="utf-8"
     )
-    if elevation.returncode == 0:
-        log.info("Elevated Stop-Service completed.")
-        return True
-    log.warning("UAC-elevated Stop-Service failed: %s", elevation.stderr.strip()[:200])
-    return False
+    try:
+        tf.write(elevated_body)
+        tf.close()
+        ps1_path = tf.name
+
+        # Wrap Start-Process call so the outer (non-elevated) shell
+        # waits for UAC + the elevated child to complete.
+        launcher = (
+            f"Start-Process -Verb RunAs -Wait -FilePath powershell.exe "
+            f"-ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass',"
+            f"'-File','{ps1_path}')"
+        )
+        elevation = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command", launcher],
+            capture_output=True, text=True,
+        )
+        if elevation.returncode == 0:
+            log.info("Elevated Stop-Service completed.")
+            return True
+        log.warning("UAC-elevated Stop-Service failed: %s",
+                    (elevation.stderr or elevation.stdout).strip()[:200])
+        return False
+    finally:
+        try:
+            import os
+            os.unlink(ps1_path)
+        except Exception:
+            pass
 
 
 def kill_asus_stack(stop_services_first: bool = True) -> None:

@@ -667,9 +667,12 @@ Each chunk is a list of zone updates. Records are 4 bytes (`<zone_id>
 0xff <data1> <data2>`) in 0x1b chunks, 5 bytes in 0x5b chunks. 122
 distinct zone IDs identified, mostly 0x01..0x6f sequential.
 
-**Write blocked**: Windows HID stack is bound to iface 2; ctrl_transfer
-via libusb STALLs ("Pipe error"). Tested `hidapi.write` /
-`send_feature_report` / `pyusb.ctrl_transfer` — all rejected.
+**Write blocked via libusb**: Windows HID stack is bound to iface 2;
+`ctrl_transfer` via libusb STALLs ("Pipe error"). `send_feature_report`
+also rejected. BUT — important correction 2026-05-12 — `hidapi.write`
+(HID Output Report) DOES work: `dev.write(bytes([0xEC, 0x83, ...]))`
+returned 65B successfully. Earlier §9.4 claim that hidapi.write was
+rejected was wrong.
 
 Decision: **delegate to OpenRGB** via `openrgb-python` SDK client.
 OpenRGB has already reverse-engineered the proprietary protocol, is
@@ -678,9 +681,50 @@ hardware. New module: `polylux/drivers/aura_rgb/`. User installs
 OpenRGB separately and enables the SDK server; Polylux connects on
 127.0.0.1:6742. Documented in README.
 
+Default safe mode: Polylux only controls devices of type MOTHERBOARD —
+keyboards, mice, headsets (the G915s in Vlad's case) are left untouched
+so they keep being driven by their vendor software (G-Hub, Synapse).
+Users opt in to other types via config: `aura_rgb.types: [MOTHERBOARD, KEYBOARD]`.
+
 Also checked: Windows Dynamic Lighting requires LampArray (usage page
 0x59). Aura uses vendor-specific 0xFF72, so Windows native lighting
 APIs don't recognize it. OpenRGB is the cleanest path.
+
+### 9.4.1 BIOS RGB toggle = hardware power cut (Vlad's verification 2026-05-12)
+
+Vlad's BIOS has the "Aura RGB" toggle Disabled by default (his preference
+— no lights in PC). Tests showed:
+
+  - With BIOS RGB Disabled: OpenRGB connects, enumerates the
+    MOTHERBOARD device (8 LEDs detected), accepts mode + color writes
+    without error — but **physically, no LEDs light up**. Sending the
+    AC wake-up sequence (`ec 83`, `ec c1`, `ec 32 NN`, `ec 31 NN`)
+    captured from `full_init_p1.pcap` dev 8 didn't change this.
+  - With BIOS RGB Enabled: identical OpenRGB CLI command immediately
+    lit up the LEDs (red → off via `--mode Off`).
+
+Conclusion: **BIOS RGB Disabled physically cuts power to the LED
+strips**. The chip is reachable and accepts software commands either way,
+but downstream LED drivers have no power. AC has a userland override
+mechanism (Vlad confirms it can turn LEDs on even with BIOS disabled),
+but we have not yet decoded which call AC uses — likely either:
+
+  - UEFI variable manipulation (`SetFirmwareEnvironmentVariableW`)
+  - ASUS asio kernel driver method call (asio2sdk / asio3.sys)
+  - ACPI/WMI invocation through an ASUS namespace
+  - SMI / BIOS callback through a vendor driver
+
+v0.4+ research direction: Frida-hook LightingService while AC enables
+RGB, capture the syscalls / driver IOCTL / WMI method invocation.
+Replicate in Polylux as an admin-required "wake RGB" step.
+
+For v0.3 ship: documented as a known constraint — "if BIOS RGB is
+disabled, enable it in BIOS Setup to allow software control". Same
+behavior as AC for non-savvy users; informed users can enable BIOS.
+Vast majority of ROG users have BIOS RGB Enabled by default.
+
+Sources:
+  https://rog-forum.asus.com/t5/asus-software/armoury-crate-turn-off-livedash-oled/m-p/860938
 
 ### 9.5 Chip1A21 refactor (clean architecture)
 

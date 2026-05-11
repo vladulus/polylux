@@ -3,15 +3,29 @@
 Connects to a running OpenRGB SDK Server (default localhost:6742). The
 user is responsible for installing and starting OpenRGB separately; we
 detect at connect time and raise a clear error if it's not reachable.
+
+By default, Polylux only controls devices of type MOTHERBOARD — not
+keyboards / mice / headsets / other peripherals OpenRGB detects.
+Users can opt in to other types via the `types` filter on connect().
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 6742
+
+# Default-safe device types — Polylux only touches the motherboard.
+# Users opt in to others (keyboard, mouse, etc.) explicitly.
+DEFAULT_TYPES = ("MOTHERBOARD",)
+ALL_TYPES = (
+    "MOTHERBOARD", "DRAM", "GPU", "COOLER", "LEDSTRIP", "KEYBOARD",
+    "MOUSE", "MOUSEMAT", "HEADSET", "HEADSET_STAND", "GAMEPAD",
+    "LIGHT", "SPEAKER", "VIRTUAL", "STORAGE", "CASE", "MICROPHONE",
+    "ACCESSORY", "KEYPAD", "LAPTOP", "MONITOR", "CHAIR", "UNKNOWN",
+)
 
 
 class AuraRGBError(RuntimeError):
@@ -28,16 +42,26 @@ class AuraRGB:
     Holds a connection to the OpenRGB SDK Server. Use `AuraRGB.connect()`
     to create one. Caller is responsible for `close()` (or use as a
     context manager).
+
+    A `types` filter restricts which OpenRGB device types Polylux is
+    willing to control. Default: MOTHERBOARD only — leaves keyboards,
+    mice, headsets, etc. untouched so we don't override the user's other
+    RGB software (Logitech G-Hub, Razer Synapse, etc).
     """
     _client: object = None    # openrgb.OpenRGBClient
+    _types: tuple[str, ...] = DEFAULT_TYPES
 
     @classmethod
-    def connect(cls, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> "AuraRGB":
+    def connect(cls, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
+                types: tuple[str, ...] = DEFAULT_TYPES) -> "AuraRGB":
         """Connect to an OpenRGB SDK Server. Default 127.0.0.1:6742.
 
-        Raises AuraRGBError if the server isn't reachable. The user must
-        have OpenRGB installed and running (with "Enable SDK Server" in
-        OpenRGB settings, or `OpenRGB.exe --server` on the CLI).
+        Args:
+          types: tuple of OpenRGB device type names to control. Default
+                 ("MOTHERBOARD",) — keyboards/mice/etc are filtered out.
+                 Use ALL_TYPES (or a custom tuple) to opt in to others.
+
+        Raises AuraRGBError if the server isn't reachable.
         """
         try:
             from openrgb import OpenRGBClient
@@ -56,7 +80,7 @@ class AuraRGB:
                 f"SDK server in Settings, or launch with `--server`."
             ) from ex
 
-        return cls(_client=client)
+        return cls(_client=client, _types=tuple(types))
 
     def close(self) -> None:
         if self._client is not None:
@@ -74,26 +98,41 @@ class AuraRGB:
 
     @property
     def devices(self) -> list:
-        """List of detected RGB devices (OpenRGB's `Device` objects)."""
+        """All detected devices (no type filter applied)."""
         if self._client is None:
             raise AuraRGBError("not connected")
         return list(self._client.devices)
 
+    @property
+    def controlled_devices(self) -> list:
+        """Devices matching the current type filter — these are the
+        ones set_all() / turn_off() will actually touch."""
+        if self._client is None:
+            raise AuraRGBError("not connected")
+        return [d for d in self._client.devices if d.type.name in self._types]
+
     def set_all(self, color: RGB) -> None:
-        """Set every detected RGB device to the same color."""
+        """Set every controlled device (per `types` filter) to one color.
+
+        Devices outside the filter are left untouched.
+        """
         if self._client is None:
             raise AuraRGBError("not connected")
         from openrgb.utils import RGBColor
         rc = RGBColor(*color)
-        for dev in self._client.devices:
+        for dev in self.controlled_devices:
             try:
                 dev.set_color(rc)
-            except Exception as ex:
-                # Some devices may not accept solid-color writes; skip.
+            except Exception:
                 continue
 
     def set_device(self, device_index: int, color: RGB) -> None:
-        """Set one detected device by index to the given color."""
+        """Set one detected device by index to the given color.
+
+        NOTE: index is into `self.devices` (all detected), not the
+        filtered list. This is for advanced use — UI usually drives
+        set_all() with the type filter doing the right thing.
+        """
         if self._client is None:
             raise AuraRGBError("not connected")
         from openrgb.utils import RGBColor
@@ -106,5 +145,5 @@ class AuraRGB:
         devs[device_index].set_color(RGBColor(*color))
 
     def turn_off(self) -> None:
-        """Set every device to black (effectively off)."""
+        """Set every controlled device to black (effectively off)."""
         self.set_all((0, 0, 0))

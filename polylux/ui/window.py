@@ -103,7 +103,7 @@ class PolyluxWindow(QMainWindow):
 
         device_specs = [
             ("matrix",     "matrix",     ["clock", "text", "fill", "off"]),
-            ("oled",       "oled",       ["hardware_monitor", "text", "qcode", "preset_gif", "off"]),
+            ("oled",       "oled",       ["hardware_monitor", "text", "preset_gif", "off"]),
             ("ryujin_lcd", "ryujin LCD", ["hardware_monitor", "off"]),
             ("aura_rgb",   "aura RGB",   ["solid", "off"]),
         ]

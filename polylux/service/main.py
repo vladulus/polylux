@@ -1,15 +1,15 @@
-"""Polylux foreground service — scene-based driver dispatch.
+"""Polylux foreground service — scene-based driver dispatch with UI.
 
-Loads polylux.yaml, kills the ASUS userland stack, opens chip 1A21
-once, and starts one driver thread per enabled device. Each driver
-renders its configured scene on a polling cadence.
+Single-process architecture:
+  - Main thread: Qt event loop (UI + tray)
+  - Driver threads: one per enabled device, read ServiceState every
+    iteration so UI changes propagate live
+  - Stop event coordinates shutdown across threads + Qt
 
 Usage::
 
-    python -m polylux.service [--config path/to/polylux.yaml]
-
-For Windows service install, wrap with nssm pointing at the venv's
-pythonw.exe + this module.
+    python -m polylux.service                # full mode: drivers + UI + tray
+    python -m polylux.service --headless     # no UI/tray (Windows service mode)
 """
 from __future__ import annotations
 
@@ -26,42 +26,57 @@ from typing import Optional
 from polylux import config as cfg_mod
 from polylux.config import PolyluxConfig
 from polylux.service.kill_asus_stack import kill_asus_stack
+from polylux.ui.state import ServiceState, build_state
 
 log = logging.getLogger("polylux")
 
 
 # ---------------------------------------------------------------------------
-# Scene runners — one per device, take (chip_or_client, cfg, stop_event)
+# Scene runners — read state.snapshot() each iteration so UI mutations propagate
 # ---------------------------------------------------------------------------
 
 
-def run_matrix(chip, mcfg, stop: threading.Event) -> None:
-    """Matrix scene loop. Updates the matrix every `update_seconds`."""
+def run_matrix(chip, state: ServiceState, stop: threading.Event) -> None:
     from polylux.drivers.anime_matrix import AniMeMatrix
     from polylux.drivers.anime_matrix.render import Frame
 
     matrix = AniMeMatrix(chip=chip)
+    last_scene = None
+    off_done = False
+
     while not stop.is_set():
-        frame = Frame()
-        scene = mcfg.scene
-        if scene == "clock":
-            now = datetime.now().strftime("%H:%M")
-            frame.draw_tiny_text(now, color=mcfg.color, rotation=mcfg.rotation)
-        elif scene == "text":
-            frame.draw_tiny_text(mcfg.text, color=mcfg.color, rotation=mcfg.rotation)
-        elif scene == "fill":
-            frame.fill(mcfg.color)
-        elif scene == "off":
-            pass  # black frame
-        else:
-            log.warning("matrix unknown scene %r — leaving black", scene)
+        mcfg = state.snapshot().matrix
+        if mcfg.scene != last_scene:
+            off_done = False
+            last_scene = mcfg.scene
+
+        if mcfg.scene == "off":
+            if not off_done:
+                try:
+                    # Black frame once — actually clears the matrix
+                    matrix.send_frame(Frame().to_bytes())
+                    off_done = True
+                except Exception as ex:
+                    log.warning("matrix clear failed: %s", ex)
+            state.mark_update("matrix")
+            stop.wait(mcfg.update_seconds)
+            continue
 
         try:
+            frame = Frame()
+            if mcfg.scene == "clock":
+                now = datetime.now().strftime("%H:%M")
+                frame.draw_tiny_text(now, color=mcfg.color, rotation=mcfg.rotation)
+            elif mcfg.scene == "text":
+                frame.draw_tiny_text(mcfg.text, color=mcfg.color, rotation=mcfg.rotation)
+            elif mcfg.scene == "fill":
+                frame.fill(mcfg.color)
             matrix.send_frame(frame.to_bytes())
+            state.mark_update("matrix")
         except Exception as ex:
+            state.mark_update("matrix", error=str(ex))
             log.warning("matrix send_frame failed: %s", ex)
 
-        # Sleep in small increments so SIGINT is responsive
         slept = 0.0
         while slept < mcfg.update_seconds and not stop.is_set():
             time.sleep(min(0.1, mcfg.update_seconds - slept))
@@ -69,10 +84,6 @@ def run_matrix(chip, mcfg, stop: threading.Event) -> None:
 
 
 def _read_value_source(source: str) -> str:
-    """Read a hardware-monitor value and format it as a short string.
-
-    Returns "?" if the source can't be read (e.g., no GPU lib installed).
-    """
     if source == "cpu_pct":
         try:
             import psutil
@@ -92,7 +103,7 @@ def _read_value_source(source: str) -> str:
             for key in ("coretemp", "k10temp", "cpu_thermal"):
                 if key in temps and temps[key]:
                     return f"{temps[key][0].current:.0f} °C"
-            return "n/a"  # Windows psutil doesn't expose CPU temps natively
+            return "n/a"
         except Exception:
             return "?"
     if source == "gpu_temp":
@@ -110,35 +121,46 @@ def _read_value_source(source: str) -> str:
     return "?"
 
 
-def run_oled(chip, ocfg, stop: threading.Event) -> None:
-    """OLED scene loop."""
+def run_oled(chip, state: ServiceState, stop: threading.Event) -> None:
     from polylux.drivers.livedash_oled import LiveDashOLED
 
     oled = LiveDashOLED(chip=chip)
+    last_scene = None
     one_shot_done = False
 
     while not stop.is_set():
-        scene = ocfg.scene
+        ocfg = state.snapshot().oled
+        if ocfg.scene != last_scene:
+            one_shot_done = False
+            # Force OLED to re-send ec 51 09 (text mode) on next set_text.
+            # Without this, switching away from preset_gif/off back to
+            # text/hw_monitor is sticky — driver caches "text mode armed"
+            # but chip is actually in preset mode.
+            oled._text_mode_armed = False
+            last_scene = ocfg.scene
+
         try:
-            if scene == "hardware_monitor":
+            if ocfg.scene == "hardware_monitor":
                 value = _read_value_source(ocfg.value_source)
                 oled.set_text(ocfg.label, value)
-            elif scene == "text":
-                oled.set_text(ocfg.label, ocfg.value)
-            elif scene == "qcode" and not one_shot_done:
-                chip.hid_write(bytes([0xEC, 0x51, 0x10, 0x01, 0x01]) + b"\x00" * 60)
-                one_shot_done = True
-            elif scene == "preset_gif" and not one_shot_done:
-                # Send ec 51 10 for default preset rotation. preset_index
-                # currently unused — the chip cycles through factory
-                # presets on its own once in slot 0x10.
+            elif ocfg.scene == "text":
+                # Single-line free text. Use ocfg.value (or fallback) as
+                # the displayed string. Label intentionally empty so the
+                # OLED isn't littered with leftover hardware_monitor labels.
+                text = ocfg.value if ocfg.value else "POLYLUX"
+                oled.set_text("", text)
+            elif ocfg.scene == "preset_gif" and not one_shot_done:
                 chip.hid_write(bytes([0xEC, 0x51, 0x10]) + b"\x00" * 62)
                 one_shot_done = True
-            elif scene == "off" and not one_shot_done:
-                # Return chip to data-input mode; OLED stops displaying.
+            elif ocfg.scene == "off" and not one_shot_done:
+                # Actually clear the OLED: empty text + return to data-input.
+                # Without this, the previous content stays on the display.
+                oled.set_text("", "")
                 chip.hid_write(bytes([0xEC, 0x51, 0x15]) + b"\x00" * 62)
                 one_shot_done = True
+            state.mark_update("oled")
         except Exception as ex:
+            state.mark_update("oled", error=str(ex))
             log.warning("oled update failed: %s", ex)
 
         slept = 0.0
@@ -147,28 +169,49 @@ def run_oled(chip, ocfg, stop: threading.Event) -> None:
             slept += 0.1
 
 
-def run_aura_rgb(acfg, stop: threading.Event) -> None:
-    """Aura RGB one-shot via OpenRGB SDK."""
+def run_aura_rgb(state: ServiceState, stop: threading.Event) -> None:
     from polylux.drivers.aura_rgb import AuraRGB, AuraRGBError
 
+    last_scene = None
+    last_color = None
+    rgb = None
     try:
-        rgb = AuraRGB.connect(host=acfg.host, port=acfg.port)
-    except AuraRGBError as ex:
-        log.warning("aura_rgb connect failed (skip): %s", ex)
-        return
+        while not stop.is_set():
+            acfg = state.snapshot().aura_rgb
 
-    try:
-        if acfg.scene == "solid":
-            log.info("aura_rgb: %d devices detected, setting solid %s",
-                     len(rgb.devices), acfg.color)
-            rgb.set_all(acfg.color)
-        elif acfg.scene == "off":
-            log.info("aura_rgb: setting all devices off")
-            rgb.turn_off()
-        # No polling loop — RGB doesn't change unless config does.
-        stop.wait()
+            # Connect lazily on first iteration
+            if rgb is None:
+                try:
+                    rgb = AuraRGB.connect(host=acfg.host, port=acfg.port,
+                                          types=acfg.types)
+                    controlled = rgb.controlled_devices
+                    log.info("aura_rgb: connected, %d total devices, %d controlled (%s)",
+                             len(rgb.devices), len(controlled),
+                             ", ".join(d.name for d in controlled) or "none")
+                except AuraRGBError as ex:
+                    state.mark_update("aura_rgb", error=str(ex))
+                    log.warning("aura_rgb connect failed: %s", ex)
+                    # Retry every 5 seconds
+                    stop.wait(5.0)
+                    continue
+
+            try:
+                if acfg.scene != last_scene or acfg.color != last_color:
+                    if acfg.scene == "solid":
+                        rgb.set_all(acfg.color)
+                    elif acfg.scene == "off":
+                        rgb.turn_off()
+                    last_scene = acfg.scene
+                    last_color = acfg.color
+                state.mark_update("aura_rgb")
+            except Exception as ex:
+                state.mark_update("aura_rgb", error=str(ex))
+                log.warning("aura_rgb update failed: %s", ex)
+            stop.wait(1.0)
     finally:
-        rgb.close()
+        if rgb is not None:
+            try: rgb.close()
+            except Exception: pass
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +234,10 @@ def main() -> int:
                         choices=("DEBUG", "INFO", "WARNING", "ERROR"))
     parser.add_argument("--no-kill-asus", action="store_true",
                         help="Skip kill_asus_stack (override config)")
+    parser.add_argument("--headless", action="store_true",
+                        help="No UI / tray (for running as Windows service)")
+    parser.add_argument("--skin", default="claude",
+                        help="UI skin name (default: claude)")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -199,8 +246,10 @@ def main() -> int:
         datefmt="%H:%M:%S",
     )
 
-    cfg: PolyluxConfig = cfg_mod.load(args.config)
-    log.info("config loaded from %s", args.config)
+    yaml_path = Path(args.config)
+    state = build_state(yaml_path)
+    cfg = state.snapshot()
+    log.info("config loaded from %s", yaml_path)
     log.info("  matrix.enabled=%s scene=%s", cfg.matrix.enabled, cfg.matrix.scene)
     log.info("  oled.enabled=%s scene=%s", cfg.oled.enabled, cfg.oled.scene)
     log.info("  ryujin_lcd.enabled=%s scene=%s", cfg.ryujin_lcd.enabled, cfg.ryujin_lcd.scene)
@@ -210,7 +259,6 @@ def main() -> int:
         log.info("killing ASUS stack (Aac3572MbHal + services)...")
         kill_asus_stack()
 
-    # Open chip 1A21 once if any chip-1A21 device is enabled.
     chip = None
     need_chip = cfg.matrix.enabled or cfg.oled.enabled
     if need_chip:
@@ -225,39 +273,29 @@ def main() -> int:
     threads: list[threading.Thread] = []
 
     if cfg.oled.enabled and chip is not None:
-        # IMPORTANT: send OLED commands BEFORE matrix init so ec 51 09 takes
-        # before ec 42 01 suppression. The OLED driver does this in set_text().
-        t = threading.Thread(target=run_oled, args=(chip, cfg.oled, _stop_event),
+        t = threading.Thread(target=run_oled, args=(chip, state, _stop_event),
                              daemon=True, name="oled")
         t.start()
         threads.append(t)
-        time.sleep(0.3)  # let OLED settle into text mode before matrix init
+        time.sleep(0.3)
 
     if cfg.matrix.enabled and chip is not None:
-        t = threading.Thread(target=run_matrix, args=(chip, cfg.matrix, _stop_event),
+        t = threading.Thread(target=run_matrix, args=(chip, state, _stop_event),
                              daemon=True, name="matrix")
         t.start()
         threads.append(t)
 
     if cfg.aura_rgb.enabled:
-        t = threading.Thread(target=run_aura_rgb, args=(cfg.aura_rgb, _stop_event),
+        t = threading.Thread(target=run_aura_rgb, args=(state, _stop_event),
                              daemon=True, name="aura_rgb")
         t.start()
         threads.append(t)
 
-    if cfg.ryujin_lcd.enabled:
-        # Ryujin LCD hardware_monitor is firmware-resident on chip 1988 —
-        # it shows hw monitor data autonomously once Aac3572MbHal stops
-        # overwriting it. For now, scene=hardware_monitor is implicitly
-        # handled by killing Aac3572MbHal. scene=off would require talking
-        # to chip 1988 directly (TBD). Log + skip for now.
-        if cfg.ryujin_lcd.scene == "hardware_monitor":
-            log.info("ryujin_lcd: firmware-default hw monitor active (no thread needed)")
-        else:
-            log.warning("ryujin_lcd.scene=%s not yet implemented", cfg.ryujin_lcd.scene)
+    if cfg.ryujin_lcd.enabled and cfg.ryujin_lcd.scene == "hardware_monitor":
+        log.info("ryujin_lcd: firmware-default hw monitor active (no thread needed)")
 
-    if not threads:
-        log.warning("no drivers running; nothing to do")
+    if not threads and args.headless:
+        log.warning("no drivers enabled in headless mode; exiting")
         if chip is not None:
             chip.close()
         return 0
@@ -265,12 +303,22 @@ def main() -> int:
     signal.signal(signal.SIGINT, _on_signal)
     signal.signal(signal.SIGTERM, _on_signal)
 
-    log.info("Polylux running. Ctrl-C to stop.")
-    try:
-        while not _stop_event.is_set():
-            time.sleep(0.5)
-    except KeyboardInterrupt:
-        pass
+    if args.headless:
+        log.info("Polylux running headless. Ctrl-C to stop.")
+        try:
+            while not _stop_event.is_set():
+                time.sleep(0.5)
+        except KeyboardInterrupt:
+            pass
+    else:
+        # Qt event loop — UI + tray
+        log.info("Polylux running. Tray icon active, UI on tray click.")
+        from polylux.ui.app import PolyluxApp
+        app = PolyluxApp(state=state, skin_name=args.skin)
+        # Bridge Qt quit -> stop_event
+        app._app.aboutToQuit.connect(_stop_event.set)
+        rc = app.exec()
+        log.info("Qt loop exited rc=%d", rc)
 
     log.info("stopping driver threads...")
     _stop_event.set()
