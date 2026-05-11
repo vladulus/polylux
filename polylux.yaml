@@ -1,13 +1,36 @@
-# Polylux configuration. Override per device.
+# Claude's Polylux — runtime configuration.
 # Run with: python -m polylux.service
+
+service:
+  # Kill ASUS userland stack at startup (Aac3572MbHal + supervising services).
+  # First run will trigger a UAC prompt to stop services properly. Subsequent
+  # runs only need to kill any orphan processes.
+  kill_asus_stack: true
 
 matrix:
   enabled: true
-  mode: force_color   # the only mode in v0.1
-  color: [0, 255, 0]  # RGB — change to whatever you want
+  scene: clock              # clock | text | fill | off
+  color: [255, 255, 255]    # white digits
+  rotation: 270             # 0/90/180/270 — landscape text reads best at 270
+  text: ""                  # used when scene=text
+  update_seconds: 1.0       # how often to re-render the clock
 
 oled:
-  enabled: false      # not yet implemented
+  enabled: true
+  scene: hardware_monitor   # hardware_monitor | text | qcode | preset_gif | off
+  label: "CPU Load"
+  value_source: cpu_pct     # cpu_temp | gpu_temp | cpu_pct | mem_pct | static
+  value: ""                 # used when scene=text
+  update_seconds: 2.0
 
 ryujin_lcd:
-  enabled: false      # not yet implemented
+  enabled: false            # firmware-resident hw monitor takes over once Aac3572MbHal is killed
+  scene: hardware_monitor   # hardware_monitor | off
+                            # NOTE: custom_image blocked by ASUS firmware bug (see PROJECT_STATE.md §9.2)
+
+aura_rgb:
+  enabled: false            # requires OpenRGB installed + SDK server running on host:port
+  scene: "off"              # solid | off  (quoted — YAML 1.1 treats off as boolean otherwise)
+  color: [0, 0, 255]        # blue, used when scene=solid
+  host: 127.0.0.1
+  port: 6742
