@@ -1,461 +1,120 @@
 # Next session — pick up here
 
-> Read `PROJECT_STATE.md` **§9 first** — the 2026-05-11 session cracked
-> all four motherboard outputs' protocols. Matrix + OLED text work
-> standalone. OLED Custom Image and Ryujin LCD upload byte-correctly
-> but need one more pcap to find the "activate display" mode-switch.
+> Read `PROJECT_STATE.md` **§15 first** — 2026-05-12 was the v0.3
+> milestones day. UI shipped, RGB validated end-to-end, OLED scenes
+> polished. Read §2 + §2b for the working agreement, then §15.
 
-## TL;DR — what works as of 2026-05-11
+## TL;DR — what works as of 2026-05-12 (v0.3)
 
-  - **AniMe Matrix:** full standalone (init secret `ec 42 01` baked
-    into driver). Render primitives + 3×5 font + image draw all work.
-  - **LiveDash OLED text:** full standalone (mode switch `ec 51 09`
-    baked into `set_text()`). Works simultaneously with matrix.
-  - **Aura RGB:** delegated to OpenRGB via `polylux.drivers.aura_rgb`.
-    User installs OpenRGB separately and enables SDK server.
-  - **OLED Custom Image upload:** protocol byte-perfect, but display
-    activation needs another pcap. Next-session work (see below).
-  - **Ryujin LCD upload:** same — protocol decoded, display activation
-    TBD.
+  - **Matrix:** clock / text / fill / off, 3x5 font, rotation 0/90/180/270.
+  - **OLED:** hardware_monitor (cpu_pct / mem_pct / cpu_temp / gpu_temp via
+    psutil+pynvml) / text (custom string) / preset_gif (factory ROM
+    animations) / off. Q-Code removed from user scenes (BIOS POST only).
+  - **Aura RGB:** delegated to OpenRGB. Default type filter is
+    ("MOTHERBOARD",) — keyboards/mice never touched. Validated live on
+    Vlad's Z690 Extreme with BIOS RGB enabled. Requires BIOS RGB on,
+    same constraint as AC for now (override is v0.4+ research).
+  - **UI:** PyQt6 native window, Winamp-style frameless skinnable, tray
+    icon, debounced YAML autosave on changes. Default skin: `claude`
+    (760x480, dark, Claude orange accent).
+  - **Service:** `polylux/service/main.py` — Qt event loop + driver
+    threads in one process. `kill_asus_stack` at startup (UAC fallback
+    via temp .ps1, pre-checked so no UAC if services already stopped).
+
+## Run modes
+
+  - Full mode: `python -m polylux.service` (drivers + UI + tray)
+  - Headless: `python -m polylux.service --headless` (Windows service)
+  - UI dev: `python -m polylux.ui.app` (no drivers, just window)
+  - No UAC: `python -m polylux.service --no-kill-asus`
+  - Custom skin: `python -m polylux.service --skin claude`
 
 ## First action when you resume
 
-1. **Refactor `polylux/service/main.py`** to use the new drivers
-   (Chip1A21 + AniMeMatrix + LiveDashOLED + RyujinLCD + AuraRGB).
-   Drop the old `MatrixForceColorDriver` / `UsbForceColorDriver`.
-   Define a scene-based YAML config:
+Pick ONE of these (ordered by impact for v0.4 public launch):
 
-     matrix:
-       enabled: true
-       scene: clock                # or "text" / "image" / "fill"
-       color: [255, 255, 255]
-       text: "12:34"
-     oled:
-       enabled: true
-       label: "CPU Temp."
-       value_source: cpu_temp      # poll psutil/wmi for value
-     ryujin_lcd:
-       enabled: true
-       scene: hardware_monitor      # or "custom_image"
-       image: "path/to/anim.gif"
-     aura_rgb:
-       enabled: false              # requires OpenRGB SDK server
-       color: [0, 0, 255]
+1. **3 more skins** — `polylux/ui/skins/<name>/skin.json` + assets:
+     - `winamp-classic` (LCD green retro tribute, mono Comic Sans? lol no
+       — pixel font + green-on-black like classic Winamp 2)
+     - `rog` (dark gaming red — for users transitioning from AC)
+     - `cyberpunk` (purple/green retro-futur, terminal-ish)
+   Each ~30 minutes if you already understand the skin format
+   (`polylux/ui/skin.py` generates QSS from JSON).
 
-2. **`kill_asus_stack()` helper** that the service runs at startup
-   so ASUS daemons can't fight for the USB device.
+2. **UI input polish** — currently scenes are dropdown-only. Add:
+     - Color picker for matrix.color and aura_rgb.color
+     - Text input for matrix.text (when scene=text)
+     - Text input for oled.label + oled.value (when scene=text)
+     - Value-source dropdown for oled (cpu_temp / gpu_temp / cpu_pct /
+       mem_pct / static)
+   This makes Polylux usable without ever editing YAML.
 
-3. **Unit tests** in `tests/`:
-     test_chip_1a21.py  — packet builders byte-for-byte vs pcap
-     test_anime_matrix_lut.py — coord ↔ byte mapping
-     test_livedash_oled.py — build_text_packet,
-                              build_image_prep_packets
-     test_ryujin_lcd.py — size encoding (24-bit LE)
+3. **Ryujin LCD driver** (chip 1988) — Vlad has Ryujin II 360, but it's
+   niche per his "nu toata lumea are riujin". Optional but a nice
+   feature for users who do have AIO. Wire protocol decoded in §9.3.
+   Test if firmware bug (per OLED §9.2) applies to chip 1988 too —
+   maybe it doesn't, since it's a different firmware.
 
-4. **Pcap targeted for OLED Custom Image / Ryujin LCD display
-   activation** — Vlad does ONE Apply on Custom Image in AC while
-   USBPcap captures, no other UI navigation. Look for what `ec 51 NN`
-   command lands between upload and visible display.
+4. **Installer + Windows service** — wrap with nssm so Polylux starts
+   at boot, runs hidden, restarts on crash. Add `scripts/install.py`
+   that detects venv, downloads OpenRGB portable, registers nssm
+   service.
 
-5. **Installer + auto-start** — `scripts/install_service.py` needs to
-   handle new driver names; nssm-based Windows service.
-
-6. **README rewrite** for v0.4 public launch — "what works,
-   installation, OpenRGB dependency, donate".
-
-7. **Italic 3x5 font for clock** — Vlad noticed that the current
-   upright 3x5 font, when drawn at rotation=270 to fit "12:34" along
-   the matrix's long axis, looks blocky. An italic / slanted version
-   would read better visually. Add font_3x5_italic.py with the same
-   glyph table but slanted (e.g. shift the top row right by 1 px,
-   bottom row unchanged), and a `font` parameter on
-   `Frame.draw_tiny_text()` to choose between roman / italic.
-
-8. **Project rename to "Claude's Polylux"** — Vlad's suggestion at
-   session end (2026-05-11). Differentiates from existing "Polylux"
-   trademarks (the lamp brand), makes authorship explicit, embraces
-   the AI-built reality. Apply in:
-     - README.md title + first paragraph
-     - polylux.yaml header comment
-     - service banner / log prefix on startup
-     - LICENSE attribution
-   Internal Python package name stays `polylux` (no need to rename
-   imports). Just the user-facing branding changes.
+5. **v0.4 research: AC's BIOS RGB override**. Frida-hook
+   LightingService.exe while AC enables RGB on a BIOS-disabled system.
+   Look for `SetFirmwareEnvironmentVariableW`, asio driver IOCTLs,
+   ACPI/WMI namespace calls. Replicate as admin-required "wake RGB"
+   step in Polylux. Vlad wants this for full AC replacement.
 
 ## What Vlad does
 
-  - Brings up AC and clicks Apply on the specific feature being
-    captured. Same procedure as 2026-05-11 session.
-  - Visually confirms displays match what Polylux sends.
+  - Watches the matrix / OLED displays and reports observations
+  - Toggles BIOS settings when needed (UAC consent, BIOS RGB on/off
+    for tests)
+  - Aesthetic / scope / product-direction taste calls
+  - Will help with UI polish — color picker / theming feedback when
+    iterating on skins
+
+## What Claude has access to
+
+  - `tools/OpenRGB/` (gitignored) — portable OpenRGB binary, run with
+    `--server` for SDK on port 6742
+  - `.venv/` with: PyQt6, pystray, fastapi (unused, can be removed),
+    openrgb-python, scapy, pyusb, hidapi, psutil, pynvml, Pillow
+  - `scratch/captures/` — USBPcap captures including dev 8 Aura RGB
+    init sequence (used for §9.4.1 finding)
+  - `polylux.yaml` — user config (Vlad's current state)
+
+## Constraints to remember
+
+  - Vlad's CLAUDE.md: no apologies, blunt, decide-don't-propose, no
+    asking permission for technical paths
+  - §2b: command-by-command for live investigation, refuse compromise
+    on product scope, ec 42 01 matrix init suppresses OLED (send OLED
+    first or reset _text_mode_armed)
+  - §10b hardware safety: no firmware writes, no driver swaps without
+    explicit consent, backup before mutate
+  - "Polylux replaces AC" — every UI/feature decision flows from this
 
 ## Captures already on disk
 
-  scratch/captures/matrix_p1.pcap           33 MB — matrix Apply
-                                                    on cold-boot AC
-  scratch/captures/oled_custom_p1.pcap      64 MB — failed OLED Custom
-                                                    upload (chip
-                                                    actually contains
-                                                    Aura RGB traffic)
-  scratch/captures/full_init_p1.pcap        19 MB — AC install +
-                                                    Ryujin preset Apply
-  scratch/captures/full_init_p1_v2.pcap     51 MB — post-reboot init +
-                                                    OLED Apply
-
-(Old content below this line predates the 2026-05-10/11 sessions.
-Most superseded by §9 in PROJECT_STATE.md.)
-
----
-
-## TL;DR
-
-  - **AniMe Matrix:** DONE. LUT verified empirically with Vlad (222 LEDs,
-    36×7 portrait layout, 16-block storage, special block-15 alignment).
-    Render primitives ship: set_pixel, set_row, set_col, fill, clear,
-    draw_text (PIL font), draw_tiny_text (3×5 pixel font), draw_image,
-    rotation parameter for portrait/landscape text orientation.
-  - **OLED next.** Same chip (PID 1A21), same USB interfaces — just a
-    different HID command prefix. Workflow: USBPcap on iface 1 ep 0x02
-    while Vlad does Apply in AC OLED settings, diff the prefix vs
-    matrix's [0xEC, 0x7F, 0x04, 0x00, 0x03], implement driver.
-  - **LCD after that.** Different chip (PID 1988), separate capture +
-    decode workflow, full 320×240 image upload.
-  - **RGB after that.** Bundle OpenRGB as dependency, no protocol RE.
-  - **Then service infra + installer + ship v0.2.**
-
-## What to verify still works on resume
-
-```python
-from polylux.drivers.anime_matrix.usb_direct import AniMeMatrix
-from polylux.drivers.anime_matrix.render import Frame
-
-with AniMeMatrix.open() as m:
-    f = Frame()
-    f.draw_tiny_text("12:34", color=(0xFF, 0xFF, 0xFF), rotation=270)
-    m.send_frame(f.to_bytes())
-```
-
-Should show the time on the matrix. If matrix is locked by ASUS daemons,
-kill them first via PowerShell admin:
-
-```
-Get-Process | Where-Object { $_.ProcessName -match
-  'Aac3572|LightingService|ArmouryCrate|asus_framework|ArmourySocketServer|ArmourySwAgent'
-} | Stop-Process -Force
-```
-
-## OLED capture setup (next session work)
-
-1. Vlad re-enables AC (Services.msc → start LightingService + ArmouryCrate
-   services). Verify AC UI opens and OLED page works.
-2. Install USBPcap if not already (https://desowin.org/usbpcap/).
-3. Identify the USB bus the PID 1A21 device is on (USBPcap install lists
-   them).
-4. Filter capture to that device only — minimizes noise.
-5. In AC, navigate to OLED page, change some setting (image, animation,
-   text), click Apply.
-6. Save .pcap to `scratch/captures/oled_apply.pcap`.
-7. Open in Wireshark, filter on bulk OUT to iface 0 ep 0x01 + interrupt
-   OUT to iface 1 ep 0x02. Compare HID prep bytes vs matrix:
-   - Matrix HID prep: `[0xEC, 0x7F, 0x04, 0x00, 0x03] + 60 zeros`
-   - OLED HID prep:   `[0xEC, 0x7F, ?, ?, ?] + ...`  (likely byte 2 or 4 differs)
-
-This is the same workflow that cracked the matrix protocol in §8d.
-
-(Old content below this line predates the matrix completion — kept for
-reference but most of it is superseded.)
-
----
-
-## ⚠️ CRITICAL CAPTURE GOTCHA (added 2026-05-10 morning, parallel session learning)
-
-**UserSessionHelper sends via WSASend, NOT plain send().** If you only hook
-`ws2_32.dll!send` you'll see ZERO real wire traffic. You'll waste hours
-wondering "where did the SetMatrixLED bytes go?" (parallel session did).
-
-**Solution ready:** use `scratch/frida_capture_v2.py`. It hooks WSASend +
-WSARecv with correct WSABUF iteration (16-byte struct on x64 with implicit
-4-byte padding before the buf pointer at offset 8), correlates each
-WSASend buffer pointer against the most-recent BCryptEncrypt output
-pointer (within 100 ms), and filters noise frames < 50 bytes.
-
-See `PROJECT_STATE.md §8a` for full hook table + WSABUF layout + correlation
-algorithm. Don't reinvent this.
-
-## Strategic context (decided 2026-05-10 morning chat)
-
-Polylux is also Vlad's **best realistic source of passive income**. Profile:
-50yo UK resident, owns home outright (mom's gift), no monthly surplus,
-runs multiple solo businesses but doesn't like sales/marketing. Polylux
-fits perfectly because:
-  - Real demand (millions of ASUS ROG users hate Armoury Crate)
-  - No comparable free open-source alternative
-  - Distribution organic (GitHub + Reddit posts on r/ASUS, r/AsusROG, HN)
-  - Donation-friendly audience (gamers spend on hardware, will donate $5/mo)
-  - Tech moat (we cracked the protocol; competitors will take months to catch up)
-  - No customer-support burden like SaaS
-
-**Monetization roadmap**:
-  - v0.2 (next 1-2 sessions): standalone TCP client, kill UWP UI dependency, brag about -290MB RAM win
-  - v0.3 (1-2 weeks): OLED + Ryujin LCD support (Vlad's original Aura Blue + GPU temp idea)
-  - v0.4 (PUBLIC LAUNCH): polished README with before/after screenshots,
-    60-sec demo video, comparison vs Armoury Crate / SignalRGB,
-    GitHub Sponsors + Buy Me a Coffee + Ko-fi links, posts on
-    r/ASUS, r/AsusROG, r/buildapc, Hacker News, ROG forum, eventually
-    MSI installer for non-tech users
-
-**Realistic income trajectory**:
-  - Month 1-3 post-launch: 10-50 stars, 0-5 donors, $0-50/mo
-  - Month 6-12: 500-2000 stars, 50-200 donors, $200-1000/mo
-  - Year 2: potentially $1000-5000/mo if maintained
-  - Cap (de facto Armoury Crate replacement): $10k+/mo + Pro version + OEM consulting
-
-This drives next-session priorities: ship v0.2 fast, then v0.3, then PUBLIC.
-
-## ⚡ PROOF: replay accepted at wire level
-
-In commit `ad6cbd8` we proved that ArmouryCrate.Service does NOT have
-AES-GCM nonce-replay protection. Captured 48 wire frames during one
-8-second window, replayed them on the same socket, ALL 48 succeeded
-(`ok_count=48 err_count=0`), and matrix visibly changed state
-(green → yellow).
-
-The 48 captured frames were background polls (QuerySMTCInfo /
-QueryNotification — small 13-byte bodies). Replaying them caused a
-state perturbation. The actual SetMatrixLED apply did not fall in our
-8-second capture window — that was the only reason matrix didn't go
-to whatever the captured Apply intended.
-
-This means the FULL wire-replay path WORKS. We just need to capture
-the right Apply burst.
-
-## Where we stopped (2026-05-09 evening)
-
-We cracked the protocol. The hardware-control channel is **not** the
-WebSocket on 9013 (that's keepalive only) but a custom binary length-prefixed
-protocol on **port 50100** between `ArmouryCrate.UserSessionHelper.exe` and
-`ArmouryCrate.Service.exe`, **encrypted via Windows BCrypt** (not OpenSSL,
-not TLS).
-
-We hooked `BCryptEncrypt` / `BCryptDecrypt` with Frida and dumped
-plaintext. The Apply command is `Cmd='SetMatrixLED'` carrying the same
-fields as `current.json`. Full format documented in `PROJECT_STATE.md` §8.
-
-## 🎯 Where we are (2026-05-10 evening — v0.2 BREAKTHROUGH)
-
-**Polylux now drives the AniMe Matrix directly via USB, with zero ASUS
-daemons cooperation.** Full details in `PROJECT_STATE.md §8d`. Read that
-first.
-
-### Quick start to verify it still works
-
-```python
-from polylux.drivers.anime_matrix.usb_direct import AniMeMatrix
-with AniMeMatrix.open() as m:
-    m.fill(0xff)   # all pixels on
-    m.flush()      # send to chip — matrix lights up white
-```
-
-If that works, we own the matrix. If not, ASUS daemons reclaimed the
-device — kill them via PowerShell admin first:
-
-```
-Get-Process | Where-Object { $_.ProcessName -match 'Aac3572|LightingService|ArmouryCrate|asus_framework|ArmourySocketServer|ArmourySwAgent' } | Stop-Process -Force
-```
-
-### Known protocol (live verified)
-
-  USB:    VID 0x0B05 PID 0x1A21, WinUSB driver, 2 interfaces.
-  Frame:  HID Output Report iface 1 ep 0x02:
-            65B = [0xEC, 0x7F, 0x04, 0x00, 0x03] + 60 zeros
-          Then BULK OUT iface 0 ep 0x01: 768B pixel data
-            (R plane, G plane, B plane — planar layout).
-
-### Captured assets in scratch/captures/
-
-  matrix_apply.pcap  — USBPcap of real ArmouryCrate Apply session.
-                       Contains many 768-byte bulk frames showing the
-                       clock at various minutes. Replay-friendly with
-                       `m.send_frame(captured_bytes)` (no LUT needed).
-
-### Partial pixel mapping LUT (R-plane bytes)
-
-  byte 0 -> (1,1)   byte 1 -> (2,1)   byte 2 -> (1,2)   byte 3 -> (2,2)
-  byte 4 -> (3,1)   byte 5 -> (4,1)   byte 6 -> (1,3)   byte 7 -> (2,3)
-  byte 8 -> (3,2)   byte 9 -> (4,2)   byte 10 -> (5,1)
-  byte 14 -> (3,3)
-  byte 100 -> (1,7)  byte 200 -> (5,9)  byte 215 -> (4,10) [G plane]
-  byte 222, 230, 255, 767 -> padding
-
-Pattern is staircase-aware non-raster scan (likely 2x2 quads scattered).
-LUT crawler is the next big task.
-
-## ⚡ Where we paused (2026-05-10 afternoon-late)
-
-**Vlad authorized full aggressive mode** — "il facem degeaba dacă nu scapăm de AC", "dacă se strică AC îl reinstalăm". Acceptăm risc de a sparge AC pentru progres.
-
-### The chain we mapped this session
-
-UWP ArmouryCrate.exe (UI click)
-  → UserSessionHelper.exe :51100   (encrypted SetMatrixLED — peer-checked)
-  → ArmouryCrate.Service.exe :50100 (encrypted forward — peer-checked)
-  → LightingService.exe (writes XML cache files in C:\Program Files (x86)\LightingService\)
-  → ??? (unknown writer)
-  → matrix changes color
-
-We confirmed AURA_3.0 XML is the canonical matrix command, captured the
-exact format with all 3 textlist entries for [@HOUR][@IND][@MINUTE], and
-verified hue values match Vlad's clicks (0.666=blue, 0.166=yellow, 0=red).
-
-### What we proved DOES NOT work for v0.2 "kill UWP"
-
-- 51100 (Helper): peer-process-check, FIN at ~20ms (§8c)
-- 50100 (Service): same peer-check
-- 9013 (ArmourySocketServer): WS connects but never replies to JSON/XML
-- File-write to LedMatrix_LastScript.xml: no effect; cache only
-- Aac3572MbHal HID writes: only 2 unique 65-byte payloads despite 3 color
-  changes (heartbeat, not data)
-- AuraSdk COM (`{05921124-...}`): instantiates from regular user, but
-  Enumerate() returns 0 devices for ALL devType masks. Likely because
-  motherboard RGB is BIOS-disabled.
-- ASUSAuraMBHal COM (`{E7C8DA76-...}`): CoCreateInstance fails with
-  E_UNEXPECTED — AppID launch permission probably gates regular users.
-
-### Strongest live clues
-
-The matrix is on USB device `\\?\usb#vid_0b05&pid_1a21&mi_00#...` (the OLED
-Controller chip per §3 — AniMe Matrix is multiplexed on it). Aac3572MbHal_x86.exe
-opens this device 469 times during a 30s capture but its writes are constant
-(2 unique 65-byte HID payloads, prefix 0xec). Either:
-  - The actual data path is async/IOCP/WriteFileEx that my hooks miss
-  - A different process writes the matrix data (not yet identified)
-  - Service.exe ↔ MbHal channel uses encryption (strings ASUSAURAHALENCYPT,
-    ASUSAURAHALKEYCONTAINER found in MbHal binary)
-
-### Where to start when resuming
-
-Pick ONE of these next attacks (ordered by EV):
-
-1. **Hook ALL processes that have HID.dll loaded simultaneously** during a
-   matrix Apply. Whoever writes >100B to the device handle wins. Start with
-   Aac3572MbHal_x86 + LightingService + ArmouryCrate.Service + ROGLiveService.
-   Use NtWriteFile + NtDeviceIoControlFile + WriteFileEx (async path).
-
-2. **Try AuraDevelopement Class** (`{34B707DC-1133-4EBC-B380-21387A50A89D}`).
-   See `scratch/com_aurasdk_explore.py` for setup. May offer richer methods.
-
-3. **Hook MbHal_x86 with WriteFileEx + completion routines**. The 469
-   handle-opens to vid_0b05&pid_1a21 must be writing data SOMEWHERE. Async
-   IO is the most likely answer.
-
-4. **Strings/IDA on Aac3572MbHal_x86.exe** to find named-pipe / encrypted
-   IPC entry. Look for `ASUSAURAHALENCYPT` keys in code, find the IPC
-   server endpoint, Frida-fake messages to drive matrix.
-
-5. **Direct HID write from Polylux** to vid_0b05&pid_1a21. Capture a
-   complete Apply burst with enough breadth (NtWriteFile + WriteFileEx +
-   NtDeviceIoControlFile in MbHal during a fresh Apply), then replay
-   verbatim from Python via `hidapi`.
-
-## First action when you resume
-
-DON'T REDO DISCOVERY. Read **§8c first** in `PROJECT_STATE.md` — it
-documents the peer-process-check wall that killed the original v0.2
-"standalone TCP" plan. Then §8b for what crypto/wire infrastructure is
-already in place.
-
-**Context as of 2026-05-10 afternoon:**
-
-  - Crypto + wire format fully solved in pure Python, validated against
-    live captures (`polylux/crypto/aura_gcm.py`, `polylux/wire/frame.py`,
-    `polylux/crypto/key_extractor.py`).
-  - Helper enforces peer-process identity check after accept() —
-    fresh-TCP from a non-UWP peer is dropped at ~20 ms with no bytes
-    read. v0.1's decrypt-substitute remains the only path that drives
-    hardware without UWP cooperation.
-  - v0.2 scope pivoted: ship a production-grade packaging of v0.1.
-
-**Next concrete steps for v0.2 (revised):**
-
-1. **Integrate `extract_key` into the live service** — even though the
-   key isn't strictly needed for decrypt-substitute (we mutate plaintext
-   post-`BCryptDecrypt`), having it in hand lets us add live monitoring
-   later. Optional: log it on startup so we can passively decrypt for
-   diagnostics.
-
-2. **Fix the OVERFLOW desync gotcha** documented in §10b. When force-color
-   refuses an overflow, log a warning so users know to restart AC if
-   matrix stops responding. Better: pre-pad the captured plaintext to a
-   safe length so overflows can't happen.
-
-3. **Auto-restart on Helper PID change** — `MatrixForceColorDriver.run_forever`
-   already polls and re-attaches; verify it's robust across actual AC
-   restarts (Vlad's stop+start cycle is a real test case).
-
-4. **Windows service installer** — wrap `python -m polylux.service` with
-   `nssm` or `pywin32`'s service framework so it auto-starts at boot,
-   runs hidden, restarts on crash. Add an installer script.
-
-5. **Tray icon** (optional) — minimal pystray icon for status + manual
-   stop. Not in v0.2 scope unless quick.
-
-6. **README + screenshots** — for v0.4 public launch later. Skip for v0.2.
-
-**For v0.3+ (parallel work, optional):**
-
-  - Frida-inject Polylux into ArmouryCrate.exe (UWP) — the only feasible
-    way to inject fresh SetMatrixLED from outside. Lets Polylux drive the
-    matrix without UI clicks while UWP runs in background.
-  - Ryujin LCD via the same decrypt-substitute pattern (capture an LCD
-    Apply, mutate fields).
-  - LiveDash OLED similarly.
-
-## What Vlad does
-
-- Help with Frida captures: he clicks Apply in Armoury Crate UI, we
-  capture. Same procedure as this session.
-- Visually confirm matrix color changes when we send commands.
-
-## Tooling already installed in venv
-
-- frida + frida-tools 17.9.7 — runtime instrumentation
-- scapy — pcap-style capture (but we don't need it now — Frida is direct)
-- websockets, cryptography, pefile, jsbeautifier, Pillow, psutil, pynvml
-
-npcap loopback adapter is enabled at OS level. No new installs needed
-for next session.
-
-## ⚠️ HARDWARE SAFETY — read this before any write command
-
-Read **`docs/PROJECT_STATE.md` §10b — DO NOT BRICK** before sending any command
-that mutates device state. Vlad's motherboard cost £1400. Hard rules:
-
-- No firmware/flash/bootloader endpoints. Ever. (Cmd names like
-  `*Update*`, `*Flash*`, `*FW*`, `*Boot*` — STOP, ask Vlad first.)
-- No raw USB writes (we're going through ASUS services on 50100).
-- Backup before mutate (still have backups in scratch/backups/).
-- Read-probe before write-probe (send a `Query*` Cmd before any
-  `Set*` Cmd, see that we get a reply).
-- AniMe Matrix first-write: send `SetMatrixLED` with literally the
-  same params as Vlad's last Apply (round-trip), confirm no visual
-  change, before changing anything.
-
-If uncertain whether a command is safe — **don't send it**, ask Vlad.
-
-## Reference scripts to keep / reuse
-
-- `scratch/frida_bcrypt.py` — the breakthrough hook. Keep, extend.
-- `scratch/extract_setmatrixled.py` — offline plaintext decoder. Will
-  evolve into `polylux/format/aura_proto.py`.
-- `scratch/frida_list_modules.py` — handy when re-attaching.
-- `scratch/frida_winsock.py` — confirms which socket carries the data.
-- `scratch/capture_loopback.py` — only needed if revisiting the
-  TCP-stream side. Frida is faster.
-
-## Reference paths
-
-- Project root: `C:\Users\vlad\Desktop\Polylux`
-- BCrypt capture: `scratch/captures/bcrypt_session_full.txt`
-- Plaintext sample: `scratch/captures/setmatrixled_plaintext.bin`
-- Beautified JS: `scratch/aio_*_beautified.js`,
-  `scratch/motherboard_index_beautified.js`
-- AMMX backups: `scratch/backups/anime/{1,2,3,4}.bin`
+  scratch/captures/matrix_p1.pcap          33 MB — matrix Apply on cold-boot AC
+  scratch/captures/oled_custom_p1.pcap     64 MB — Aura RGB traffic (mislabeled)
+  scratch/captures/oled_p1.pcap            13 MB
+  scratch/captures/oled_anim_p1.pcap       29 MB
+  scratch/captures/full_init_p1.pcap       19 MB — AC install + Ryujin preset Apply
+  scratch/captures/full_init_p1_v2.pcap    51 MB — post-reboot init + OLED Apply
+                                                   (turned out to be Q-Code Apply,
+                                                   not Custom Image)
+
+## Strategic context
+
+Polylux is Vlad's monetization path (passive income from millions of
+ASUS ROG users frustrated with AC). v0.3 should ship as soon as the
+3 skins + UI inputs are polished. Public launch v0.4 needs:
+
+  - Demo video showing AC removal -> Polylux install -> -290MB RAM win
+  - Before/after screenshots
+  - GitHub Sponsors + Buy Me a Coffee + Ko-fi links
+  - Posts on r/ASUS, r/AsusROG, r/buildapc, Hacker News, ROG forum
+  - Eventually MSI installer for non-tech users

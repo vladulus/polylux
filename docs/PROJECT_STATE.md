@@ -1472,3 +1472,161 @@ Fix for production Polylux:
 - "Nu-mi plac beculețele in PC."
 - About speaking style: blunt, direct, technical disagreement when warranted,
   no apologies, no flattery.
+- "Cand esti lead ceri ce ai nevoie si nu poti tu sa faci" — Vlad as
+  helping hands does anything Claude can't do (UAC, install software,
+  watch displays, taste calls). Claude must USE that, not protect Vlad
+  from inconvenience.
+- "mb-ul ca nu toata lumea are riujin" — motherboard work is universal,
+  Ryujin is niche. Prioritize MB completion first.
+- "ar trebui sa pot sa le opresc din polilux" — Polylux must be a full
+  AC replacement including RGB power control. v0.4+ research item: find
+  AC's mechanism to override BIOS-disabled RGB state.
+- "winamp-ul" — UI form factor decision: native skinnable window, not
+  browser. Polylux is an app, not a web page.
+
+## 15. v0.3 session — UI + RGB validation + scene polish (2026-05-12)
+
+Major milestones shipped today:
+
+### 15.1 Service refactor — scene-based YAML
+
+  - `polylux/config.py` rewritten with per-device scene enums:
+    matrix (clock/text/fill/off), oled (hardware_monitor/text/preset_gif/off
+    — `qcode` removed because Vlad pointed out it's BIOS POST-only),
+    ryujin_lcd (hardware_monitor/off), aura_rgb (solid/off) with
+    `types` filter defaulting to ("MOTHERBOARD",).
+  - `polylux/service/main.py` rewrite: single Qt event loop on main
+    thread + driver threads in background. Drivers read
+    `ServiceState.snapshot()` each iteration so UI changes propagate
+    live. Graceful shutdown via SIGINT bridges Qt aboutToQuit ->
+    stop_event.
+  - `polylux/service/kill_asus_stack.py`: kills Aac3572MbHal + ASUS
+    process list (non-admin); stops services via direct Stop-Service
+    (admin) or UAC-elevated temp .ps1 fallback. Pre-checks service
+    state — if all already Stopped, skips UAC prompt entirely (fast
+    silent startup on subsequent runs).
+
+### 15.2 PyQt6 UI — Winamp-style skinnable native window
+
+  Pivot from FastAPI/web (initial direction) per Vlad: "nu ar fi mai
+  bine sa fie nu stiu ca winamp-ul?". Anti-AC positioning, native app
+  feel, skin system more visually rich than CSS themes.
+
+  - `polylux/ui/state.py` — ServiceState: thread-safe wrapper around
+    PolyluxConfig + per-device runtime status. Drivers read snapshot,
+    UI mutates via update_device, debounced YAML autosave (2s after
+    last change).
+  - `polylux/ui/skin.py` — Skin dataclass + `load_skin()` /
+    `list_skins()`. Directory-based: `polylux/ui/skins/<name>/skin.json`
+    + optional `style.qss` override. Manifest specifies window size,
+    colors, fonts, layout. QSS auto-generated from manifest fields.
+  - `polylux/ui/window.py` — frameless main window. Draggable
+    titlebar, on-top toggle, minimize, close-to-tray. 4-device scene
+    grid + status indicators (OK / err / stale). Footer: skin
+    selector + version.
+  - `polylux/ui/app.py` — QApplication + QSystemTrayIcon. Generated
+    "P" tray icon (Claude orange). Left-click tray = show window.
+    Right-click = menu (Open Polylux / Quit).
+  - `polylux/ui/skins/claude/` — default skin: dark + Claude orange
+    accent (#C15F3C). JetBrains Mono headers, Inter body. Vlad's
+    approved size: 760x480 (started at 480x280, scaled up on his
+    feedback "ar trebui mai mare").
+
+  Standalone UI dev launcher:
+      `python -m polylux.ui.app`
+
+### 15.3 OLED scene transitions polished
+
+Per Vlad's empirical testing 2026-05-12:
+
+  - `qcode` removed from scene list — Q-Code is BIOS POST-only,
+    irrelevant as a user-runtime scene.
+  - **Sticky preset_gif fixed**: `LiveDashOLED._text_mode_armed` was
+    cached per-instance, so switching from preset_gif back to text
+    didn't re-arm `ec 51 09`. Fix: `run_oled` resets the flag on
+    every scene change.
+  - **text scene** now sends `set_text("", value)` (empty label) so
+    the `hardware_monitor` label ("CPU Load") doesn't bleed through.
+    Default value falls back to "POLYLUX" if not set.
+  - **off scene** actually clears the display:
+      - matrix: black frame (all zeros) sent once on entry, then pauses
+      - OLED: `set_text("", "")` (clears text) + `ec 51 15` (data-input
+        mode). Without the empty-text write, OLED kept showing leftover.
+
+### 15.4 Aura RGB end-to-end validation
+
+  - OpenRGB portable bundled in `tools/OpenRGB/` (gitignored).
+    Downloaded programmatically via Invoke-WebRequest from codeberg.
+  - **§9.4 correction**: earlier claim "hidapi.write rejected" was
+    wrong. `dev.write(bytes([0xEC, 0x83, ...]))` returns 65B
+    successfully. Only `send_feature_report` and `libusb ctrl_transfer`
+    are rejected. We can drive chip 18F3 directly via HID Output
+    Reports — but in practice OpenRGB delegation is still the right
+    choice (it has the full color protocol for ALL Aura devices,
+    including RAM/GPU/fan zones we'd otherwise have to decode).
+  - **Type filter**: AuraRGBConfig.types defaults to ("MOTHERBOARD",).
+    Polylux NEVER touches keyboards/mice/headsets unless user opts
+    in. Vlad's 3x Logitech G915 stays controlled by G-Hub.
+  - **§9.4.1 BIOS power-cut finding** (Vlad's verification): when
+    BIOS Aura toggle is Disabled, LED strips have NO POWER even
+    though the chip accepts software commands. Sending the AC
+    wake-up sequence (`ec 83`/`ec c1`/`ec 32`/`ec 31`) doesn't
+    help — it's hardware-level power cut, not soft state. AC has
+    a userland override (Vlad confirms), but we haven't decoded
+    which call AC uses. v0.4+ research.
+  - With BIOS Aura toggle Enabled: validated live. OpenRGB CLI
+    `--device 'ASUS ROG MAXIMUS Z690 EXTREME' --mode Direct
+    --color FF0000` immediately lit MB red.
+
+### 15.5 Skin system + theme decision
+
+  - Skins are CSS-equivalent in Qt: QSS generated from manifest
+    (`skin.json`) + optional per-skin `style.qss` override.
+  - Vlad ships with `claude` (default). Roadmap for v0.4: 3-4 more
+    skins — `winamp-classic` (LCD green retro), `rog` (dark gaming
+    red), `cyberpunk` (purple/green retro-futur), maybe `light`.
+  - User skins drop into `polylux/ui/skins/` — instantly available
+    in the UI's skin dropdown.
+
+### 15.6 Commits
+
+  cef8a54  docs §9.6.1: full BIOS→Aac3572MbHal→AC chain
+  2f4686c  docs §9.2 + §12: OLED firmware bug + RGB BIOS reasoning
+  0fcee90  [service] Scene-based refactor + kill_asus_stack helper
+  350faa5  [ui] PyQt6 Winamp-style skinnable window — v0.3 first visible
+  544b166  [ui+rgb+oled] v0.3 milestones: UI shipped, RGB validated, OLED polished
+  0fdc9b6  [gitignore] untrack tools/ — OpenRGB portable not committed
+
+### 15.7 v0.3 SHIP-ready features
+
+  - Matrix: clock / text / fill / off, 3x5 tiny font, rotation
+  - OLED: hardware_monitor (cpu_pct / mem_pct / cpu_temp / gpu_temp) /
+    text / preset_gif / off
+  - Aura RGB: solid / off via OpenRGB delegation (BIOS RGB must be on
+    for users — same constraint as AC)
+  - UI: PyQt6 native window + tray + skin system
+  - Service: single-process, kill_asus_stack at startup, graceful UAC
+
+### 15.8 Pending for v0.3 SHIP polish (next sessions)
+
+  - 3 more skins (winamp-classic / rog / cyberpunk)
+  - UI: editable label/value/color inputs per scene (now requires YAML
+    edit for text values + color picker)
+  - Ryujin LCD driver (chip 1988 — Vlad has Ryujin II 360, niche
+    feature, optional)
+  - Installer script (nssm Windows service wrap, autostart)
+  - README rewrite for public launch v0.4
+
+### 15.9 v0.4+ research targets
+
+  - **Decode AC's BIOS Aura override**: Frida-hook LightingService
+    while AC enables RGB on a BIOS-disabled system. Look for
+    SetFirmwareEnvironmentVariableW / asio driver IOCTL / ACPI WMI
+    call. Replicate as admin-required "wake RGB" step in Polylux.
+  - **OLED Custom Image firmware fix watch**: monitor ASUS BIOS
+    release notes for mention of LiveDash / OLED. Z490 took ~6 months
+    for analogous fix. Current Z690 BIOS 4505 (2025-11-28 build,
+    published 2025-12-15) doesn't address it.
+  - **BIOS image extraction**: FPT.exe / similar to extract chip
+    firmware from BIOS, grep for ec-prefixed command patterns. That's
+    the canonical source of truth for chip behavior.
