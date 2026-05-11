@@ -71,6 +71,17 @@
    bottom row unchanged), and a `font` parameter on
    `Frame.draw_tiny_text()` to choose between roman / italic.
 
+8. **Project rename to "Claude's Polylux"** — Vlad's suggestion at
+   session end (2026-05-11). Differentiates from existing "Polylux"
+   trademarks (the lamp brand), makes authorship explicit, embraces
+   the AI-built reality. Apply in:
+     - README.md title + first paragraph
+     - polylux.yaml header comment
+     - service banner / log prefix on startup
+     - LICENSE attribution
+   Internal Python package name stays `polylux` (no need to rename
+   imports). Just the user-facing branding changes.
+
 ## What Vlad does
 
   - Brings up AC and clicks Apply on the specific feature being
