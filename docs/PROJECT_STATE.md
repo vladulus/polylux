@@ -710,7 +710,7 @@ Verified live: simultaneous matrix text "BOTH WORK" + OLED text
   7. **README** rewrite for public launch: what works, what's TBD,
      install instructions, OpenRGB dependency note, donation links.
 
-### 9.6.1 BIOS owns the chip during POST
+### 9.6.1 BIOS owns the chip during POST — full ownership chain
 
 Question Vlad raised at session end: can the BIOS send commands to the
 OLED chip?
@@ -721,20 +721,61 @@ chip via the USB host controller built into the motherboard — same
 USB device PID 0x1A21 we drive from Windows, just from pre-OS firmware
 instead of from a userland process.
 
-Implications:
+**Full ownership chain (decoded from Vlad's empirical observation
+2026-05-12 morning, watching boot sequence on the displays):**
+
+  1. **Power-on:** BIOS opens chip 1A21 over the on-board USB host
+     controller, sends factory-default init to all four MB outputs
+     (matrix, OLED, Ryujin LCD via the Ryujin's USB chip, Aura RGB
+     zones). All displays come up alongside the board with stock state.
+
+  2. **POST:** BIOS switches OLED into hardware-monitor mode
+     (`ec 51 00` per slot map §9.2) and starts feeding it values it
+     reads from the SuperIO chip directly — temperatures, voltages,
+     fan RPM — no Windows involved. Q-Codes (`ec 51 01`) appear only
+     for boot-status numbers during the early POST window, then the
+     BIOS flips the mode to hw-monitor for the rest of POST.
+
+  3. **OS boot:** Aac3572MbHal_x86.exe loads with the AsusCertService
+     stack and **transparently takes over** as the data feeder, on
+     the same `ec 51 00` mode. Transition is invisible — OLED keeps
+     showing values, only the source of values changes (BIOS SuperIO
+     reads → Windows WMI reads + Aac3572MbHal writes). This explains
+     why the OLED never blinks during the BIOS-to-Windows handoff.
+
+  4. **AC starts:** ROGLiveService + ArmouryCrate.exe come up, read
+     the user's saved profile, and if anything custom was set (text
+     overlay, Custom Image, OLED preset GIF) they send the appropriate
+     `ec 51 NN` slot switch + payload. If nothing custom is set, they
+     leave the chip in `ec 51 00` and let Aac3572MbHal keep feeding.
+
+Implications for Polylux:
   - Chip 1A21's HID protocol is firmware-level standard. BIOS uses it
     too. Polylux, AC, BIOS all speak the same wire format.
-  - BIOS likely sends `ec 51 01` (Q-Code mode) + `ec dc` heartbeats at
-    boot. AC/Polylux take over at Windows boot completion with
-    `ec 51 15` (exit preset) + `ec 42 01` (data mode).
   - **Polylux can NOT control what the OLED shows during POST.** That's
     BIOS-owned. Polylux owns the chip only at Windows runtime.
+  - **At service startup the chip is NEVER neutral.** It is in
+    `ec 51 00` (hardware-monitor), with Aac3572MbHal actively writing
+    to it. To take control, Polylux MUST:
+      1. Kill Aac3572MbHal_x86 (it's a Windows service, runs even
+         without AC UI / ROGLiveService — confirmed §9.3). Otherwise
+         it fights us for the device.
+      2. Send `ec 51 15` (exit preset) to drop hardware-monitor mode.
+      3. Run full init: `Chip1A21.init_for_matrix()` re-sends
+         `ec dc` × 3 + `ec 82` + `ec c1` + `ec 42 01`, guaranteeing
+         data-input mode regardless of leftover state.
+      4. For OLED text: `LiveDashOLED.set_text()` will re-send
+         `ec 51 09` lazily on first call.
+  - Killing Aac3572MbHal is non-optional. It's the single autonomous
+    writer that doesn't depend on UWP / ROGLiveService — leaving it
+    running means OLED reverts to temps within seconds of any of our
+    writes.
 
 For a v0.3+ research effort: extract the BIOS image (FPT.exe or
 similar), grep for ASCII "EC" patterns + binary 0xEC bytes followed by
 recognizable opcode bytes, and you'll likely find the exact command
 sequences the BIOS uses. That's the canonical "minimum viable init"
-for the chip.
+for the chip — likely simpler than what AC sends.
 
 ### 9.7 Session commits
 
