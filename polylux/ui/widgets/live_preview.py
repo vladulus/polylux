@@ -90,19 +90,36 @@ class MatrixLivePreview(_BaseLivePreview):
 
 
 class OledLivePreview(_BaseLivePreview):
-    """Renders the OLED's current (label, value) tuple in white on black."""
+    """Renders the ROG LiveDash OLED — 128×32 monochrome panel.
 
-    WIDTH = 256
-    HEIGHT = 64
-    SCALE = 2
+    Layout matches AC's default: label small at top (line 1, ~10px), value
+    larger below (line 2, fills remaining height). At scale 5x the
+    on-screen widget is 640×160 — visible and readable.
+    """
+
+    WIDTH = 128
+    HEIGHT = 32
+    SCALE = 5
 
     def sizeHint(self) -> QSize:
         return QSize(self.WIDTH * self.SCALE, self.HEIGHT * self.SCALE)
 
+    def minimumSizeHint(self) -> QSize:
+        return QSize(self.WIDTH * 3, self.HEIGHT * 3)
+
     def paintEvent(self, _ev) -> None:
         p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        # Compute integer scale that fits widget and centre the OLED panel.
+        scale = max(2, min(self.width() // self.WIDTH, self.height() // self.HEIGHT))
+        panel_w = self.WIDTH * scale
+        panel_h = self.HEIGHT * scale
+        x_off = (self.width() - panel_w) // 2
+        y_off = (self.height() - panel_h) // 2
         p.fillRect(self.rect(), QColor("#000"))
+        p.fillRect(x_off, y_off, panel_w, panel_h, QColor("#000"))
+
         if not self._last:
             p.end()
             return
@@ -110,24 +127,35 @@ class OledLivePreview(_BaseLivePreview):
         p.setPen(QColor("#FFFFFF"))
         if kind == "text":
             _, label, value = self._last
-            f1 = QFont("JetBrains Mono", 9)
+            # Label small, top — about 10/32 of panel height
+            f1 = QFont("Inter", int(panel_h * 0.22))
+            f1.setWeight(QFont.Weight.Medium)
             p.setFont(f1)
-            p.drawText(8, 18, label or "")
-            f2 = QFont("JetBrains Mono", 22)
-            f2.setWeight(QFont.Weight.Light)
+            label_rect = QRectF(x_off + panel_w * 0.05, y_off + panel_h * 0.03,
+                                panel_w * 0.9, panel_h * 0.30)
+            p.drawText(label_rect,
+                       int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+                       label or "")
+            # Value bigger, below
+            f2 = QFont("Inter", int(panel_h * 0.42))
+            f2.setWeight(QFont.Weight.Bold)
             p.setFont(f2)
-            r = QRectF(8, 22, self.width() - 16, self.height() - 24)
-            p.drawText(r, int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+            value_rect = QRectF(x_off + panel_w * 0.05, y_off + panel_h * 0.34,
+                                panel_w * 0.9, panel_h * 0.64)
+            p.drawText(value_rect,
+                       int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
                        value or "")
         elif kind == "preset_gif":
             idx = self._last[1] if len(self._last) > 1 else 0
-            p.setFont(QFont("JetBrains Mono", 12))
-            p.drawText(self.rect(), int(Qt.AlignmentFlag.AlignCenter),
+            p.setFont(QFont("JetBrains Mono", max(10, panel_h // 4)))
+            p.drawText(x_off, y_off, panel_w, panel_h,
+                       int(Qt.AlignmentFlag.AlignCenter),
                        f"▶ preset_gif[{idx}]")
         elif kind == "off":
-            p.setFont(QFont("JetBrains Mono", 11))
+            p.setFont(QFont("JetBrains Mono", max(10, panel_h // 6)))
             p.setPen(QColor("#444"))
-            p.drawText(self.rect(), int(Qt.AlignmentFlag.AlignCenter), "— off —")
+            p.drawText(x_off, y_off, panel_w, panel_h,
+                       int(Qt.AlignmentFlag.AlignCenter), "— off —")
         p.end()
 
 
