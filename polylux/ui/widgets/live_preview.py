@@ -71,9 +71,10 @@ class MatrixLivePreview(_BaseLivePreview):
         p.setPen(_Qt.PenStyle.NoPen)
 
         for col, row in lut.ALL_COORDS:
-            # rotate 90°: physical X = (row-1), physical Y = (MAX_COL - col)
-            x = x_off + (row - 1) * (dot + gap)
-            y = y_off + (lut.MAX_COL - col) * (dot + gap)
+            # rotate -90° (effectively 90° physical orientation rotated 180° again):
+            # physical X = MAX_ROW - row, physical Y = col - 1
+            x = x_off + (lut.MAX_ROW - row) * (dot + gap)
+            y = y_off + (col - 1) * (dot + gap)
             if have_data:
                 rb, gb, bb = lut.rgb_bytes(col, row)
                 r = buf[rb]
