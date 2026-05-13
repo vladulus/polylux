@@ -65,6 +65,8 @@ class MatrixConfig:
     text: str = ""
     rotation: int = 270
     update_seconds: float = 1.0     # how often the scene re-renders
+    brightness: int = 100           # 0-100, applied at frame-build time
+    scroll_speed: int = 55          # used in text scene, frames-per-tick analog
 
     SCENES = ("clock", "text", "fill", "off")
 
@@ -73,6 +75,10 @@ class MatrixConfig:
             raise ValueError(f"matrix.scene must be one of {self.SCENES}, got {self.scene!r}")
         if self.rotation not in (0, 90, 180, 270):
             raise ValueError(f"matrix.rotation must be 0/90/180/270, got {self.rotation}")
+        if not 0 <= self.brightness <= 100:
+            raise ValueError(f"matrix.brightness must be 0..100, got {self.brightness}")
+        if not 1 <= self.scroll_speed <= 100:
+            raise ValueError(f"matrix.scroll_speed must be 1..100, got {self.scroll_speed}")
 
 
 @dataclass
@@ -81,18 +87,42 @@ class OledConfig:
     scene: str = "hardware_monitor"
     label: str = "CPU Temp."
     value: str = ""                  # used when scene=text (static)
-    value_source: str = "cpu_temp"   # used when scene=hardware_monitor
+    value_source: str = "cpu_temp"   # used when scene=hardware_monitor (single mode)
     update_seconds: float = 2.0
     preset_index: int = 0            # used when scene=preset_gif
+    brightness: int = 100
+    font_size: str = "medium"        # small | medium | large
+    hw_mode: str = "single"          # single | rotate
+    rotate_sources: tuple[str, ...] = ("cpu_temp", "gpu_temp", "cpu_pct")
+    rotate_interval_s: float = 3.0
 
     SCENES = ("hardware_monitor", "text", "preset_gif", "off")
-    VALUE_SOURCES = ("cpu_temp", "gpu_temp", "cpu_pct", "mem_pct", "static")
+    VALUE_SOURCES = (
+        "cpu_temp", "gpu_temp", "cpu_pct", "gpu_pct",
+        "mem_pct", "fan_rpm", "static",
+    )
+    FONT_SIZES = ("small", "medium", "large")
+    HW_MODES = ("single", "rotate")
 
     def validate(self) -> None:
         if self.scene not in self.SCENES:
             raise ValueError(f"oled.scene must be one of {self.SCENES}, got {self.scene!r}")
         if self.scene == "hardware_monitor" and self.value_source not in self.VALUE_SOURCES:
             raise ValueError(f"oled.value_source must be one of {self.VALUE_SOURCES}, got {self.value_source!r}")
+        if self.font_size not in self.FONT_SIZES:
+            raise ValueError(f"oled.font_size must be one of {self.FONT_SIZES}, got {self.font_size!r}")
+        if self.hw_mode not in self.HW_MODES:
+            raise ValueError(f"oled.hw_mode must be one of {self.HW_MODES}, got {self.hw_mode!r}")
+        if not 0 <= self.brightness <= 100:
+            raise ValueError(f"oled.brightness must be 0..100, got {self.brightness}")
+        if not 0.5 <= self.rotate_interval_s <= 30.0:
+            raise ValueError(f"oled.rotate_interval_s must be 0.5..30.0, got {self.rotate_interval_s}")
+        if self.hw_mode == "rotate":
+            bad = [s for s in self.rotate_sources if s not in self.VALUE_SOURCES]
+            if bad:
+                raise ValueError(f"oled.rotate_sources contains unknown metrics: {bad}")
+            if not self.rotate_sources:
+                raise ValueError("oled.rotate_sources cannot be empty when hw_mode=rotate")
 
 
 @dataclass
@@ -117,12 +147,15 @@ class AuraRGBConfig:
     # Default safe: only touch motherboard. Users opt in to keyboards
     # / mice / etc by adding their type names here.
     types: tuple[str, ...] = ("MOTHERBOARD",)
+    brightness: int = 100             # 0-100, multiplied into RGB before send
 
     SCENES = ("solid", "off")
 
     def validate(self) -> None:
         if self.scene not in self.SCENES:
             raise ValueError(f"aura_rgb.scene must be one of {self.SCENES}, got {self.scene!r}")
+        if not 0 <= self.brightness <= 100:
+            raise ValueError(f"aura_rgb.brightness must be 0..100, got {self.brightness}")
 
 
 @dataclass
@@ -171,6 +204,8 @@ def load(path: str | Path = DEFAULT_CONFIG_PATH) -> PolyluxConfig:
     cfg.matrix.text = str(m.get("text", cfg.matrix.text))
     cfg.matrix.rotation = int(m.get("rotation", cfg.matrix.rotation))
     cfg.matrix.update_seconds = float(m.get("update_seconds", cfg.matrix.update_seconds))
+    cfg.matrix.brightness = int(m.get("brightness", cfg.matrix.brightness))
+    cfg.matrix.scroll_speed = int(m.get("scroll_speed", cfg.matrix.scroll_speed))
 
     o = raw.get("oled") or {}
     cfg.oled.enabled = bool(o.get("enabled", False))
@@ -180,6 +215,12 @@ def load(path: str | Path = DEFAULT_CONFIG_PATH) -> PolyluxConfig:
     cfg.oled.value_source = str(o.get("value_source", cfg.oled.value_source))
     cfg.oled.update_seconds = float(o.get("update_seconds", cfg.oled.update_seconds))
     cfg.oled.preset_index = int(o.get("preset_index", cfg.oled.preset_index))
+    cfg.oled.brightness = int(o.get("brightness", cfg.oled.brightness))
+    cfg.oled.font_size = str(o.get("font_size", cfg.oled.font_size))
+    cfg.oled.hw_mode = str(o.get("hw_mode", cfg.oled.hw_mode))
+    if "rotate_sources" in o and isinstance(o["rotate_sources"], list):
+        cfg.oled.rotate_sources = tuple(str(s) for s in o["rotate_sources"])
+    cfg.oled.rotate_interval_s = float(o.get("rotate_interval_s", cfg.oled.rotate_interval_s))
 
     r = raw.get("ryujin_lcd") or {}
     cfg.ryujin_lcd.enabled = bool(r.get("enabled", False))
@@ -194,6 +235,7 @@ def load(path: str | Path = DEFAULT_CONFIG_PATH) -> PolyluxConfig:
     cfg.aura_rgb.port = int(a.get("port", cfg.aura_rgb.port))
     if "types" in a and isinstance(a["types"], list):
         cfg.aura_rgb.types = tuple(str(t).upper() for t in a["types"])
+    cfg.aura_rgb.brightness = int(a.get("brightness", cfg.aura_rgb.brightness))
 
     cfg.validate()
     return cfg
