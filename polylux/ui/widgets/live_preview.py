@@ -27,24 +27,17 @@ class _BaseLivePreview(QWidget):
 class MatrixLivePreview(_BaseLivePreview):
     """Renders the AniMe Matrix 768-byte buffer using the real LED LUT.
 
-    Each LED is drawn as a small dot at its physical (col, row) coordinate.
-    Inactive LEDs (the staircase cutouts at top-left and bottom-right) are
-    simply skipped so the preview matches the actual case-front shape.
+    The matrix is mounted horizontally on the Z690 Extreme's I/O shroud,
+    so we render with rows on the X axis (left-to-right) and columns on
+    the Y axis (top-to-bottom). This matches the physical orientation
+    the user sees.
     """
 
-    DOT = 6     # ellipse diameter
-    GAP_X = 3
-    GAP_Y = 1
-
     def sizeHint(self) -> QSize:
-        try:
-            from polylux.drivers.anime_matrix import lut
-            return QSize(
-                lut.MAX_COL * (self.DOT + self.GAP_X) + 8,
-                lut.MAX_ROW * (self.DOT + self.GAP_Y) + 8,
-            )
-        except Exception:
-            return QSize(80, 260)
+        return QSize(380, 120)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(280, 80)
 
     def paintEvent(self, _ev) -> None:
         p = QPainter(self)
@@ -60,17 +53,27 @@ class MatrixLivePreview(_BaseLivePreview):
         buf: bytes = self._last or b""
         have_data = len(buf) >= lut.TOTAL_BYTES
 
-        # Center the matrix in the available width
-        total_w = lut.MAX_COL * (self.DOT + self.GAP_X)
-        x_off = max(4, (self.width() - total_w) // 2)
-        y_off = 4
+        # Horizontal orientation: rows on X (36 across), cols on Y (7 down).
+        # Compute dot size that fits the available area.
+        avail_w = self.width() - 16
+        avail_h = self.height() - 16
+        dot_x = max(4, avail_w // lut.MAX_ROW)
+        dot_y = max(4, avail_h // lut.MAX_COL)
+        dot = max(3, min(dot_x, dot_y))
+        gap = max(1, dot // 5)
+
+        used_w = lut.MAX_ROW * (dot + gap)
+        used_h = lut.MAX_COL * (dot + gap)
+        x_off = (self.width() - used_w) // 2
+        y_off = (self.height() - used_h) // 2
 
         from PyQt6.QtCore import Qt as _Qt
         p.setPen(_Qt.PenStyle.NoPen)
 
         for col, row in lut.ALL_COORDS:
-            x = x_off + (col - 1) * (self.DOT + self.GAP_X)
-            y = y_off + (row - 1) * (self.DOT + self.GAP_Y)
+            # rotate 90°: physical X = (row-1), physical Y = (MAX_COL - col)
+            x = x_off + (row - 1) * (dot + gap)
+            y = y_off + (lut.MAX_COL - col) * (dot + gap)
             if have_data:
                 rb, gb, bb = lut.rgb_bytes(col, row)
                 r = buf[rb]
@@ -82,7 +85,7 @@ class MatrixLivePreview(_BaseLivePreview):
                     p.setBrush(QColor(r, g, b))
             else:
                 p.setBrush(QColor(28, 28, 28))
-            p.drawEllipse(x, y, self.DOT, self.DOT)
+            p.drawEllipse(x, y, dot, dot)
         p.end()
 
 

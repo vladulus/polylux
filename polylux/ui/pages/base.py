@@ -104,15 +104,16 @@ class DevicePage(QWidget):
         # --- Live preview ---
         preview_card = QFrame()
         preview_card.setObjectName("card")
-        prev_h = QHBoxLayout(preview_card)
-        prev_h.setContentsMargins(18, 14, 18, 14)
+        prev_v = QVBoxLayout(preview_card)
+        prev_v.setContentsMargins(18, 14, 18, 14)
+        prev_v.setSpacing(8)
         prev_lbl = QLabel("LIVE PREVIEW")
         prev_lbl.setObjectName("card_label")
-        prev_h.addWidget(prev_lbl, 1)
+        prev_v.addWidget(prev_lbl)
         self._live_widget = self.build_live_preview()
-        prev_h.addWidget(self._live_widget)
-        outer.addWidget(preview_card)
-        outer.addStretch(1)
+        prev_v.addWidget(self._live_widget, 1)
+        outer.addWidget(preview_card, 1)
+        outer.addStretch(0)
 
         # Initial state from config
         scene_now = self._scene_from_state()
