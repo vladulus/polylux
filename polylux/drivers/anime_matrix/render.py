@@ -19,10 +19,49 @@ Usage::
 """
 from __future__ import annotations
 
+import os as _os
 from typing import Iterable, Optional, Sequence, Tuple
 
 from . import lut
 from . import font_3x5
+
+
+_FONT_CANDIDATES = (
+    # path, size — first match wins. Tuned for legibility on a 7-LED-tall display.
+    ("C:/Windows/Fonts/consola.ttf", 9),  # Consolas — clean mono, ~6px tall
+    ("C:/Windows/Fonts/cour.ttf",    9),  # Courier New — mono fallback
+    ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 9),  # Linux
+)
+
+_cached_matrix_font = None
+
+
+def _matrix_font():
+    """Return a PIL font picked for the AniMe Matrix's 7-LED short axis.
+
+    Tries a few common Windows / Linux monospace TTFs first, falls back to
+    Pillow's built-in default (DejaVu Sans) at a small pixel size. Cached
+    after first call so the lookup doesn't repeat per frame.
+    """
+    global _cached_matrix_font
+    if _cached_matrix_font is not None:
+        return _cached_matrix_font
+    try:
+        from PIL import ImageFont  # type: ignore
+    except ImportError:
+        return None
+    for path, size in _FONT_CANDIDATES:
+        if _os.path.exists(path):
+            try:
+                _cached_matrix_font = ImageFont.truetype(path, size)
+                return _cached_matrix_font
+            except Exception:
+                continue
+    try:
+        _cached_matrix_font = ImageFont.load_default(size=8)
+    except TypeError:
+        _cached_matrix_font = ImageFont.load_default()
+    return _cached_matrix_font
 
 
 RGB = Tuple[int, int, int]
@@ -172,10 +211,7 @@ class Frame:
         if rotation not in (0, 90, 180, 270):
             raise ValueError(f"rotation must be 0, 90, 180, or 270; got {rotation}")
         if font is None:
-            try:
-                font = ImageFont.load_default(size=8)
-            except TypeError:
-                font = ImageFont.load_default()
+            font = _matrix_font() or ImageFont.load_default()
 
         # Canvas dimensions before final rotation. For rotation=0/180 we draw
         # at portrait dimensions (col × row); for rotation=90/270 we draw at
@@ -248,10 +284,7 @@ class Frame:
         if rotation not in (0, 90, 180, 270):
             raise ValueError(f"rotation must be 0, 90, 180, or 270; got {rotation}")
         if font is None:
-            try:
-                font = ImageFont.load_default(size=8)
-            except TypeError:
-                font = ImageFont.load_default()
+            font = _matrix_font() or ImageFont.load_default()
 
         if rotation in (90, 270):
             win_w, canvas_h = lut.MAX_ROW, lut.MAX_COL
@@ -311,10 +344,7 @@ class Frame:
         except ImportError as ex:
             raise RuntimeError("Pillow is required for measure_text") from ex
         if font is None:
-            try:
-                font = ImageFont.load_default(size=8)
-            except TypeError:
-                font = ImageFont.load_default()
+            font = _matrix_font() or ImageFont.load_default()
         bb = ImageDraw.Draw(Image.new("L", (1, 1))).textbbox((0, 0), text, font=font)
         return (bb[2] - bb[0], bb[3] - bb[1])
 
