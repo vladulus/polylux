@@ -152,12 +152,6 @@ class MatrixPage(DevicePage):
         v.addWidget(QLabel("ROTATION"))
         v.addWidget(rot)
 
-        enable = QCheckBox("ENABLED")
-        enable.setChecked(cfg.enabled)
-        enable.toggled.connect(
-            lambda on: self._state.update_device("matrix", {"enabled": on})
-        )
-        v.addWidget(enable)
         v.addStretch(1)
         return w
 

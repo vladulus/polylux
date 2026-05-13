@@ -167,31 +167,11 @@ class OledPage(DevicePage):
             return  # Empty list is invalid — config validation would reject
         self._state.update_device("oled", {"rotate_sources": sources})
 
-    def build_common_config(self) -> QWidget:
-        cfg: OledConfig = self._state.snapshot().oled
-        w = QWidget()
-        v = QVBoxLayout(w)
-        v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(14)
-
-        enable = QCheckBox("ENABLED")
-        enable.setChecked(cfg.enabled)
-        enable.toggled.connect(
-            lambda on: self._state.update_device("oled", {"enabled": on})
-        )
-        v.addWidget(enable)
-
-        # Hidden for v0.4: brightness (chip ignores EC 14 opcode), font_size
-        # (not implemented in driver), refresh_rate (driver auto-paces).
-        # Re-introduce when the protocol is verified or driver gains the
-        # capability.
-        note = QLabel("brightness / font size / refresh rate\nnot supported by chip firmware (v0.4)")
-        note.setObjectName("dim")
-        note.setWordWrap(True)
-        v.addWidget(note)
-
-        v.addStretch(1)
-        return w
+    def build_common_config(self):
+        # OLED has no driver-side common controls in v0.4 — ENABLED lives in
+        # the header. Returning None hides the COMMON card entirely so the
+        # scene config card spans the full width.
+        return None
 
     def build_live_preview(self) -> QWidget:
         return OledLivePreview()

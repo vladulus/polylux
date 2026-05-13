@@ -70,12 +70,6 @@ class AuraRGBPage(DevicePage):
             v.addWidget(cb)
             self._type_checks.append((t, cb))
 
-        enable = QCheckBox("ENABLED")
-        enable.setChecked(cfg.enabled)
-        enable.toggled.connect(
-            lambda on: self._state.update_device("aura_rgb", {"enabled": on})
-        )
-        v.addWidget(enable)
         v.addStretch(1)
         return w
 

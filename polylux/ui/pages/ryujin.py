@@ -26,19 +26,9 @@ class RyujinPage(DevicePage):
         v.addStretch(1)
         return w
 
-    def build_common_config(self) -> QWidget:
-        cfg = self._state.snapshot().ryujin_lcd
-        w = QWidget()
-        v = QVBoxLayout(w)
-        v.setContentsMargins(0, 0, 0, 0)
-        enable = QCheckBox("ENABLED")
-        enable.setChecked(cfg.enabled)
-        enable.toggled.connect(
-            lambda on: self._state.update_device("ryujin_lcd", {"enabled": on})
-        )
-        v.addWidget(enable)
-        v.addStretch(1)
-        return w
+    def build_common_config(self):
+        # Ryujin has no extra controls in v0.4 — ENABLED is in the header.
+        return None
 
     def build_live_preview(self):
         return RyujinLivePreview()

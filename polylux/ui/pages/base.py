@@ -19,7 +19,7 @@ from typing import Optional
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
+    QCheckBox, QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
 )
 
 from polylux.ui.state import ServiceState
@@ -54,6 +54,18 @@ class DevicePage(QWidget):
         h_sub = QLabel(self.DEVICE_SUBTITLE)
         h_sub.setObjectName("dim")
         header_row.addWidget(h_sub)
+        # ENABLED toggle sits in the header bar — every page needs it
+        # and it doesn't belong inside a per-scene config card.
+        try:
+            dev_cfg = getattr(state.snapshot(), self.DEVICE_KEY)
+            initial_enabled = bool(getattr(dev_cfg, "enabled", True))
+        except Exception:
+            initial_enabled = True
+        self._enable_cb = QCheckBox("ENABLED")
+        self._enable_cb.setChecked(initial_enabled)
+        self._enable_cb.toggled.connect(self._on_enable_toggled)
+        header_row.addSpacing(16)
+        header_row.addWidget(self._enable_cb)
         outer.addLayout(header_row)
 
         self._status_lbl = QLabel("● starting…")
@@ -87,16 +99,18 @@ class DevicePage(QWidget):
         self._scene_cfg_layout.setContentsMargins(18, 18, 18, 18)
         cfg_row.addWidget(self._scene_cfg_holder, 1)
 
-        common_holder = QFrame()
-        common_holder.setObjectName("card")
-        common_v = QVBoxLayout(common_holder)
-        common_v.setContentsMargins(18, 18, 18, 18)
-        common_lbl = QLabel("COMMON")
-        common_lbl.setObjectName("card_label")
-        common_v.addWidget(common_lbl)
-        common_v.addSpacing(10)
-        common_v.addWidget(self.build_common_config())
-        cfg_row.addWidget(common_holder, 1)
+        common_widget = self.build_common_config()
+        if common_widget is not None:
+            common_holder = QFrame()
+            common_holder.setObjectName("card")
+            common_v = QVBoxLayout(common_holder)
+            common_v.setContentsMargins(18, 18, 18, 18)
+            common_lbl = QLabel("COMMON")
+            common_lbl.setObjectName("card_label")
+            common_v.addWidget(common_lbl)
+            common_v.addSpacing(10)
+            common_v.addWidget(common_widget)
+            cfg_row.addWidget(common_holder, 1)
         outer.addLayout(cfg_row)
 
         outer.addSpacing(20)
@@ -140,7 +154,11 @@ class DevicePage(QWidget):
     def build_scene_config(self, scene: str) -> QWidget:
         return QWidget()
 
-    def build_common_config(self) -> QWidget:
+    def build_common_config(self) -> Optional[QWidget]:
+        """Override to return widgets for the right-hand COMMON card. Return
+        None to hide the card entirely and let the scene config card span
+        the full width.
+        """
         return QWidget()
 
     def build_live_preview(self) -> QWidget:
@@ -190,6 +208,12 @@ class DevicePage(QWidget):
     def _on_frame(self, frame) -> None:
         if hasattr(self._live_widget, "set_frame"):
             self._live_widget.set_frame(frame)
+
+    def _on_enable_toggled(self, on: bool) -> None:
+        try:
+            self._state.update_device(self.DEVICE_KEY, {"enabled": on})
+        except Exception:
+            log.exception("enable toggle failed for %s", self.DEVICE_KEY)
 
     def _refresh_status(self) -> None:
         status = self._state.status().get(self.DEVICE_KEY, {})
