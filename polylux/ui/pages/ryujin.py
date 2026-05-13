@@ -1,11 +1,44 @@
-"""Ryujin page — placeholder until Task 20."""
-from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
+"""Ryujin LCD page — v0.4 minimal (firmware-driven scenes only)."""
+from __future__ import annotations
 
-from polylux.ui.state import ServiceState
+from PyQt6.QtWidgets import QCheckBox, QLabel, QVBoxLayout, QWidget
+
+from polylux.ui.pages.base import DevicePage
+from polylux.ui.widgets.live_preview import RyujinLivePreview
 
 
-class RyujinPage(QWidget):
-    def __init__(self, state: ServiceState) -> None:
-        super().__init__()
-        v = QVBoxLayout(self)
-        v.addWidget(QLabel("Ryujin LCD — coming soon"))
+class RyujinPage(DevicePage):
+    DEVICE_KEY = "ryujin_lcd"
+    DEVICE_TITLE = "Ryujin LCD"
+    DEVICE_SUBTITLE = "AIO · CHIP 1988 · firmware-driven"
+
+    def _scenes(self):
+        return [
+            ("hardware_monitor", "HARDWARE_MONITOR", None),
+            ("off",              "OFF",              None),
+        ]
+
+    def build_scene_config(self, scene: str) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.addWidget(QLabel("(firmware-driven — no extra config)"))
+        v.addStretch(1)
+        return w
+
+    def build_common_config(self) -> QWidget:
+        cfg = self._state.snapshot().ryujin_lcd
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        enable = QCheckBox("ENABLED")
+        enable.setChecked(cfg.enabled)
+        enable.toggled.connect(
+            lambda on: self._state.update_device("ryujin_lcd", {"enabled": on})
+        )
+        v.addWidget(enable)
+        v.addStretch(1)
+        return w
+
+    def build_live_preview(self):
+        return RyujinLivePreview()
