@@ -27,10 +27,12 @@ from . import font_3x5
 
 
 _FONT_CANDIDATES = (
-    # path, size — first match wins. Tuned for legibility on a 7-LED-tall display.
-    ("C:/Windows/Fonts/consola.ttf", 9),  # Consolas — clean mono, ~6px tall
-    ("C:/Windows/Fonts/cour.ttf",    9),  # Courier New — mono fallback
-    ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 9),  # Linux
+    # path, size — first match wins. AC-style: bold uppercase chunky strokes.
+    ("C:/Windows/Fonts/consolab.ttf", 9),  # Consolas Bold — thicker verticals
+    ("C:/Windows/Fonts/consola.ttf",  9),  # Consolas Regular fallback
+    ("C:/Windows/Fonts/courbd.ttf",   9),  # Courier New Bold
+    ("C:/Windows/Fonts/cour.ttf",     9),  # Courier New
+    ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf", 9),
 )
 
 _cached_matrix_font = None

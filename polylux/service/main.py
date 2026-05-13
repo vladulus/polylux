@@ -94,14 +94,16 @@ def run_matrix(chip, state: ServiceState, stop: threading.Event) -> None:
                     scroll_offset = 0
                     if mcfg.text:
                         long_axis = lut.MAX_ROW if mcfg.rotation in (90, 270) else lut.MAX_COL
-                        tw, _ = frame.measure_text(mcfg.text)
+                        tw, _ = frame.measure_text(mcfg.text.upper())
                         text_fits = tw <= long_axis
                         text_seg_w = max(1, tw + 8)
                     else:
                         text_fits = True
+                # AC-style: render in uppercase for legibility on a 7-row strip.
+                shown_text = mcfg.text.upper() if mcfg.text else mcfg.text
                 if mcfg.text and not text_fits:
                     frame.draw_text_scrolled(
-                        mcfg.text, scroll_offset,
+                        shown_text, scroll_offset,
                         color=scaled_color, rotation=mcfg.rotation,
                     )
                     # scroll_speed (1-100) → px/sec  ≈ scroll_speed × 0.3
@@ -110,7 +112,7 @@ def run_matrix(chip, state: ServiceState, stop: threading.Event) -> None:
                     scroll_offset = int(scroll_offset_f)
                     is_scrolling_text = True
                 elif mcfg.text:
-                    frame.draw_text(mcfg.text, color=scaled_color, rotation=mcfg.rotation)
+                    frame.draw_text(shown_text, color=scaled_color, rotation=mcfg.rotation)
             elif mcfg.scene == "image" and mcfg.image_path:
                 try:
                     from PIL import Image, ImageEnhance
