@@ -70,7 +70,10 @@ def run_matrix(chip, state: ServiceState, stop: threading.Event) -> None:
                 now = datetime.now().strftime("%H:%M")
                 frame.draw_tiny_text(now, color=mcfg.color, rotation=mcfg.rotation)
             elif mcfg.scene == "text":
-                frame.draw_tiny_text(mcfg.text, color=mcfg.color, rotation=mcfg.rotation)
+                # Use PIL-based draw_text so any character (letters, digits,
+                # punctuation) renders. draw_tiny_text's 3x5 font is digits+
+                # clock-symbols only and would silently render letters as blanks.
+                frame.draw_text(mcfg.text, color=mcfg.color, rotation=mcfg.rotation)
             elif mcfg.scene == "image" and mcfg.image_path:
                 try:
                     from PIL import Image
