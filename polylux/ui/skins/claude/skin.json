@@ -5,8 +5,8 @@
   "version": "2.0",
 
   "window": {
-    "width": 940,
-    "height": 640,
+    "width": 1280,
+    "height": 860,
     "frameless": true,
     "always_on_top_available": true
   },
