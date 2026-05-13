@@ -73,11 +73,17 @@ def run_matrix(chip, state: ServiceState, stop: threading.Event) -> None:
             continue
 
         is_scrolling_text = False
+        b = max(0, min(100, mcfg.brightness)) / 100.0
+        scaled_color = (
+            int(mcfg.color[0] * b),
+            int(mcfg.color[1] * b),
+            int(mcfg.color[2] * b),
+        )
         try:
             frame = Frame()
             if mcfg.scene == "clock":
                 now = datetime.now().strftime("%H:%M")
-                frame.draw_tiny_text(now, color=mcfg.color, rotation=mcfg.rotation)
+                frame.draw_tiny_text(now, color=scaled_color, rotation=mcfg.rotation)
             elif mcfg.scene == "text":
                 if (mcfg.text != last_text or mcfg.color != last_text_color
                         or mcfg.rotation != last_text_rotation):
@@ -95,17 +101,21 @@ def run_matrix(chip, state: ServiceState, stop: threading.Event) -> None:
                 if mcfg.text and not text_fits:
                     frame.draw_text_scrolled(
                         mcfg.text, scroll_offset,
-                        color=mcfg.color, rotation=mcfg.rotation,
+                        color=scaled_color, rotation=mcfg.rotation,
                     )
                     px_per_frame = max(1, mcfg.scroll_speed // 15)
                     scroll_offset = (scroll_offset + px_per_frame) % text_seg_w
                     is_scrolling_text = True
                 elif mcfg.text:
-                    frame.draw_text(mcfg.text, color=mcfg.color, rotation=mcfg.rotation)
+                    frame.draw_text(mcfg.text, color=scaled_color, rotation=mcfg.rotation)
             elif mcfg.scene == "image" and mcfg.image_path:
                 try:
-                    from PIL import Image
+                    from PIL import Image, ImageEnhance
                     img = Image.open(mcfg.image_path)
+                    if b < 1.0:
+                        if img.mode != "RGB":
+                            img = img.convert("RGB")
+                        img = ImageEnhance.Brightness(img).enhance(b)
                     frame.draw_image(img)
                 except Exception as ex:
                     log.warning("matrix image scene: %s — %s", mcfg.image_path, ex)
