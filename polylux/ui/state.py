@@ -15,7 +15,7 @@ import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional  # noqa: F401
 
 from polylux.config import PolyluxConfig, load as load_config
 
@@ -48,6 +48,14 @@ class ServiceState:
         }
         self._save_timer: Optional[threading.Timer] = None
         self._listeners: list[Callable[[], None]] = []
+        self._last_frames: dict[str, Any] = {
+            "matrix": None, "oled": None,
+            "ryujin_lcd": None, "aura_rgb": None,
+        }
+        self._frame_listeners: dict[str, list[Callable[[Any], None]]] = {
+            "matrix": [], "oled": [],
+            "ryujin_lcd": [], "aura_rgb": [],
+        }
 
     # --- read API ---
 
@@ -151,6 +159,41 @@ class ServiceState:
             log.info("config saved to %s", self._yaml_path)
         except Exception:
             log.exception("failed to save config")
+
+    # --- per-device last-frame storage ---
+
+    def last_frame(self, device: str) -> Any:
+        with self._lock:
+            if device not in self._last_frames:
+                raise ValueError(f"unknown device: {device}")
+            return self._last_frames[device]
+
+    def set_frame(self, device: str, frame: Any) -> None:
+        """Drivers call this after each successful render. Stores the
+        frame and notifies any UI subscribers (thread-safe; listeners
+        are invoked outside the lock).
+        """
+        with self._lock:
+            if device not in self._last_frames:
+                raise ValueError(f"unknown device: {device}")
+            self._last_frames[device] = frame
+            listeners = list(self._frame_listeners[device])
+        for fn in listeners:
+            try:
+                fn(frame)
+            except Exception:
+                log.exception("frame listener failed for %s", device)
+
+    def add_frame_listener(self, device: str, fn: Callable[[Any], None]) -> None:
+        with self._lock:
+            if device not in self._frame_listeners:
+                raise ValueError(f"unknown device: {device}")
+            self._frame_listeners[device].append(fn)
+
+    def remove_frame_listener(self, device: str, fn: Callable[[Any], None]) -> None:
+        with self._lock:
+            if fn in self._frame_listeners.get(device, []):
+                self._frame_listeners[device].remove(fn)
 
 
 def build_state(yaml_path: Path) -> ServiceState:
