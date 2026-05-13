@@ -25,37 +25,64 @@ class _BaseLivePreview(QWidget):
 
 
 class MatrixLivePreview(_BaseLivePreview):
-    """Renders the AniMe Matrix 1216-byte buffer as a 38×32-ish dot grid.
+    """Renders the AniMe Matrix 768-byte buffer using the real LED LUT.
 
-    For v0.4 we render a compact representation — each byte becomes a
-    tiny coloured rect on a fixed grid. The exact LED layout is
-    non-rectangular but the impression is enough for the user.
+    Each LED is drawn as a small dot at its physical (col, row) coordinate.
+    Inactive LEDs (the staircase cutouts at top-left and bottom-right) are
+    simply skipped so the preview matches the actual case-front shape.
     """
 
-    GRID_W = 38
-    GRID_H = 32
-    SCALE = 6
+    DOT = 6     # ellipse diameter
+    GAP_X = 3
+    GAP_Y = 1
 
     def sizeHint(self) -> QSize:
-        return QSize(self.GRID_W * self.SCALE, self.GRID_H * self.SCALE)
+        try:
+            from polylux.drivers.anime_matrix import lut
+            return QSize(
+                lut.MAX_COL * (self.DOT + self.GAP_X) + 8,
+                lut.MAX_ROW * (self.DOT + self.GAP_Y) + 8,
+            )
+        except Exception:
+            return QSize(80, 260)
 
     def paintEvent(self, _ev) -> None:
-        if not self.isVisible():
-            return
         p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.fillRect(self.rect(), QColor("#000"))
-        if not self._last:
+
+        try:
+            from polylux.drivers.anime_matrix import lut
+        except Exception:
             p.end()
             return
-        buf: bytes = self._last
-        body = buf[8:8 + self.GRID_W * self.GRID_H] if len(buf) >= 8 + self.GRID_W * self.GRID_H else buf
-        for i, v in enumerate(body):
-            if v == 0:
-                continue
-            x = (i % self.GRID_W) * self.SCALE
-            y = (i // self.GRID_W) * self.SCALE
-            p.fillRect(x, y, self.SCALE - 1, self.SCALE - 1,
-                       QColor(int(v), int(v * 0.5), int(v * 0.25)))
+
+        buf: bytes = self._last or b""
+        have_data = len(buf) >= lut.TOTAL_BYTES
+
+        # Center the matrix in the available width
+        total_w = lut.MAX_COL * (self.DOT + self.GAP_X)
+        x_off = max(4, (self.width() - total_w) // 2)
+        y_off = 4
+
+        from PyQt6.QtCore import Qt as _Qt
+        p.setPen(_Qt.PenStyle.NoPen)
+
+        for col, row in lut.ALL_COORDS:
+            x = x_off + (col - 1) * (self.DOT + self.GAP_X)
+            y = y_off + (row - 1) * (self.DOT + self.GAP_Y)
+            if have_data:
+                rb, gb, bb = lut.rgb_bytes(col, row)
+                r = buf[rb]
+                g = buf[gb]
+                b = buf[bb]
+                if r == 0 and g == 0 and b == 0:
+                    p.setBrush(QColor(28, 28, 28))
+                else:
+                    p.setBrush(QColor(r, g, b))
+            else:
+                p.setBrush(QColor(28, 28, 28))
+            p.drawEllipse(x, y, self.DOT, self.DOT)
         p.end()
 
 
