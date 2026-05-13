@@ -127,21 +127,29 @@ class OledLivePreview(_BaseLivePreview):
         p.setPen(QColor("#FFFFFF"))
         if kind == "text":
             _, label, value = self._last
+            # Approximation of the ROG/Eurostile-ish font AC ships — Bahnschrift
+            # Condensed (Windows 10+) and Agency FB (Windows default) have the
+            # same condensed-geometric block-letter feel.
+            rog_family = "Bahnschrift Condensed, Agency FB, Impact, Inter"
             # Label centered horizontally on the top half of the panel.
-            f1 = QFont("Inter", int(panel_h * 0.22))
-            f1.setWeight(QFont.Weight.Medium)
+            f1 = QFont()
+            f1.setFamilies(["Bahnschrift Condensed", "Agency FB", "Impact", "Inter"])
+            f1.setPixelSize(int(panel_h * 0.28))
+            f1.setWeight(QFont.Weight.DemiBold)
             p.setFont(f1)
             label_rect = QRectF(x_off, y_off + panel_h * 0.03,
-                                panel_w, panel_h * 0.32)
+                                panel_w, panel_h * 0.34)
             p.drawText(label_rect,
                        int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
                        label or "")
             # Value bigger, centered on the bottom half.
-            f2 = QFont("Inter", int(panel_h * 0.42))
+            f2 = QFont()
+            f2.setFamilies(["Bahnschrift Condensed", "Agency FB", "Impact", "Inter"])
+            f2.setPixelSize(int(panel_h * 0.55))
             f2.setWeight(QFont.Weight.Bold)
             p.setFont(f2)
-            value_rect = QRectF(x_off, y_off + panel_h * 0.34,
-                                panel_w, panel_h * 0.64)
+            value_rect = QRectF(x_off, y_off + panel_h * 0.36,
+                                panel_w, panel_h * 0.62)
             p.drawText(value_rect,
                        int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
                        value or "")
