@@ -172,7 +172,10 @@ class Frame:
         if rotation not in (0, 90, 180, 270):
             raise ValueError(f"rotation must be 0, 90, 180, or 270; got {rotation}")
         if font is None:
-            font = ImageFont.load_default()
+            try:
+                font = ImageFont.load_default(size=8)
+            except TypeError:
+                font = ImageFont.load_default()
 
         # Canvas dimensions before final rotation. For rotation=0/180 we draw
         # at portrait dimensions (col × row); for rotation=90/270 we draw at
@@ -245,7 +248,10 @@ class Frame:
         if rotation not in (0, 90, 180, 270):
             raise ValueError(f"rotation must be 0, 90, 180, or 270; got {rotation}")
         if font is None:
-            font = ImageFont.load_default()
+            try:
+                font = ImageFont.load_default(size=8)
+            except TypeError:
+                font = ImageFont.load_default()
 
         if rotation in (90, 270):
             win_w, canvas_h = lut.MAX_ROW, lut.MAX_COL
@@ -301,7 +307,10 @@ class Frame:
         except ImportError as ex:
             raise RuntimeError("Pillow is required for measure_text") from ex
         if font is None:
-            font = ImageFont.load_default()
+            try:
+                font = ImageFont.load_default(size=8)
+            except TypeError:
+                font = ImageFont.load_default()
         bb = ImageDraw.Draw(Image.new("L", (1, 1))).textbbox((0, 0), text, font=font)
         return (bb[2] - bb[0], bb[3] - bb[1])
 

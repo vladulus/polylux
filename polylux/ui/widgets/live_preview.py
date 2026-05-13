@@ -57,10 +57,10 @@ class MatrixLivePreview(_BaseLivePreview):
         # Compute dot size that fits the available area.
         avail_w = self.width() - 16
         avail_h = self.height() - 16
-        dot_x = max(4, avail_w // lut.MAX_ROW)
-        dot_y = max(4, avail_h // lut.MAX_COL)
-        dot = max(3, min(dot_x, dot_y))
-        gap = max(1, dot // 5)
+        dot_x = max(4, avail_w // (lut.MAX_ROW + 2))  # +2 padding cells
+        dot_y = max(4, avail_h // (lut.MAX_COL + 1))
+        dot = max(3, min(dot_x, dot_y, 14))             # cap so dots don't dominate
+        gap = max(1, dot // 4)
 
         used_w = lut.MAX_ROW * (dot + gap)
         used_h = lut.MAX_COL * (dot + gap)
