@@ -2,41 +2,52 @@
   "name": "Claude",
   "author": "Claude",
   "description": "Default Polylux skin — dark, minimal, Claude orange accent.",
-  "version": "1.0",
+  "version": "2.0",
 
   "window": {
-    "width": 760,
-    "height": 480,
+    "width": 940,
+    "height": 640,
     "frameless": true,
     "always_on_top_available": true
   },
 
   "colors": {
-    "bg": "#1a1a1a",
-    "bg_alt": "#222222",
-    "surface": "#2a2a2a",
-    "border": "#3a3a3a",
+    "bg": "#0d0d0d",
+    "bg_alt": "#0a0a0a",
+    "surface": "#161616",
+    "border": "#242424",
     "text": "#e6e6e6",
     "text_dim": "#888888",
     "accent": "#C15F3C",
     "accent_dim": "#7a3d27",
     "ok": "#4caf50",
     "warn": "#ffa726",
-    "err": "#ef5350"
+    "err": "#ef5350",
+    "sidebar_bg": "#0a0a0a",
+    "sidebar_border": "#1f1f1f",
+    "sidebar_active_bg": "#181818",
+    "card_bg": "#161616",
+    "card_border": "#242424",
+    "scene_card_active_bg": "#1a120e"
   },
 
   "fonts": {
     "header": ["JetBrains Mono", "Consolas", "monospace"],
     "body":   ["Inter", "Segoe UI", "sans-serif"],
     "header_size_px": 18,
-    "body_size_px": 14,
-    "mono_size_px": 13
+    "body_size_px": 13,
+    "mono_size_px": 12,
+    "label_size_px": 10
   },
 
   "layout": {
-    "padding": 18,
+    "padding": 20,
     "row_gap": 12,
-    "border_radius_px": 10,
-    "titlebar_height": 44
+    "border_radius_px": 8,
+    "titlebar_height": 36,
+    "sidebar_width": 180,
+    "main_padding_x": 26,
+    "main_padding_y": 22,
+    "card_radius": 8
   }
 }

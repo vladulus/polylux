@@ -161,6 +161,108 @@ class Skin:
             border-radius: {radius}px;
         }}
         """
+
+        base += f"""
+        /* --- v0.4 tabbed UI additions --- */
+        #sidebar {{
+            background-color: {c.get('sidebar_bg', c.get('bg_alt', '#0a0a0a'))};
+            border-right: 1px solid {c.get('sidebar_border', c.get('border', '#1f1f1f'))};
+        }}
+        #sidebar QLabel#brand {{
+            color: {c.get('accent', '#C15F3C')};
+            font-family: "{header_family}";
+            font-weight: 700;
+            font-size: 14px;
+            padding: 18px 18px 12px 18px;
+            letter-spacing: 3px;
+        }}
+        #sidebar QPushButton {{
+            background: transparent;
+            border: none;
+            border-left: 3px solid transparent;
+            text-align: left;
+            padding: 10px 14px 10px 18px;
+            color: {c.get('text_dim', '#888')};
+            font-family: "{body_family}";
+            font-size: 13px;
+        }}
+        #sidebar QPushButton:hover {{
+            color: {c.get('text', '#fff')};
+            background-color: {c.get('sidebar_active_bg', '#181818')};
+        }}
+        #sidebar QPushButton[active="true"] {{
+            color: {c.get('text', '#fff')};
+            border-left: 3px solid {c.get('accent', '#C15F3C')};
+            background-color: {c.get('sidebar_active_bg', '#181818')};
+        }}
+        #sidebar QLabel#sidebar_foot {{
+            color: {c.get('text_dim', '#444')};
+            font-size: 10px;
+            padding: 8px 18px;
+            letter-spacing: 1px;
+        }}
+
+        QFrame#scene_card {{
+            background-color: {c.get('card_bg', '#161616')};
+            border: 1px solid {c.get('card_border', '#242424')};
+            border-radius: {l.get('card_radius', 8)}px;
+        }}
+        QFrame#scene_card[active="true"] {{
+            border-color: {c.get('accent', '#C15F3C')};
+            background-color: {c.get('scene_card_active_bg', '#1a120e')};
+        }}
+        QFrame#scene_card_preview {{
+            background-color: {c.get('bg_alt', '#0a0a0a')};
+            border-bottom: 1px solid {c.get('card_border', '#1f1f1f')};
+        }}
+        QLabel#scene_card_title {{
+            color: {c.get('text_dim', '#888')};
+            font-size: 12px;
+            letter-spacing: 1px;
+        }}
+        QFrame#scene_card[active="true"] QLabel#scene_card_title {{
+            color: {c.get('accent', '#C15F3C')};
+            font-weight: 600;
+        }}
+
+        QLabel#card_label {{
+            color: {c.get('text_dim', '#666')};
+            font-size: {self.font_size('label')}px;
+            letter-spacing: 2px;
+            font-weight: 600;
+        }}
+
+        QPushButton#seg_button {{
+            background: transparent;
+            color: {c.get('text_dim', '#888')};
+            border: 1px solid {c.get('card_border', '#242424')};
+            border-right: none;
+            border-radius: 0;
+            padding: 9px 0;
+            font-family: "{self.font_family('header')}";
+            font-size: 12px;
+        }}
+        QPushButton#seg_button:first-child {{ border-top-left-radius: 6px; border-bottom-left-radius: 6px; }}
+        QPushButton#seg_button:last-child  {{ border-right: 1px solid {c.get('card_border', '#242424')}; border-top-right-radius: 6px; border-bottom-right-radius: 6px; }}
+        QPushButton#seg_button[on="true"] {{
+            background-color: {c.get('accent', '#C15F3C')};
+            color: white;
+            font-weight: 600;
+            border-color: {c.get('accent', '#C15F3C')};
+        }}
+
+        QLabel#field_label {{
+            color: {c.get('text_dim', '#888')};
+            font-size: {self.font_size('label')}px;
+            letter-spacing: 1px;
+        }}
+        QLabel#slider_readout {{
+            color: {c.get('text', '#fff')};
+            font-family: "{self.font_family('header')}";
+            font-size: 13px;
+        }}
+        """
+
         # Append per-skin overrides if present.
         custom = self.asset_dir / "style.qss"
         if custom.exists():
