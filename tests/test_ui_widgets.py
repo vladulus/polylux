@@ -128,3 +128,19 @@ def test_aura_preview_handles_list(qtbot, qapp):
     qtbot.addWidget(w)
     w.set_frame([(193, 95, 60), (0, 0, 0), (255, 255, 255)])
     assert w.last_frame() == [(193, 95, 60), (0, 0, 0), (255, 255, 255)]
+
+
+def test_sidebar_emits_nav_changed(qtbot, qapp):
+    from polylux.ui.sidebar import Sidebar
+    sb = Sidebar(items=[("dash", "Dashboard"), ("matrix", "Anime Matrix")])
+    qtbot.addWidget(sb)
+    with qtbot.waitSignal(sb.nav_changed, timeout=500) as blocker:
+        sb.set_active("matrix")
+    assert blocker.args == ["matrix"]
+
+
+def test_sidebar_default_active_is_first(qtbot, qapp):
+    from polylux.ui.sidebar import Sidebar
+    sb = Sidebar(items=[("a", "A"), ("b", "B")])
+    qtbot.addWidget(sb)
+    assert sb.active() == "a"
