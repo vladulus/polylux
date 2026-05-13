@@ -271,7 +271,11 @@ class Frame:
 
         wide = Image.new("L", (wide_w, canvas_h), 0)
         draw = ImageDraw.Draw(wide)
-        y = max(0, (canvas_h - text_h) // 2 - bb[1])
+        # Centre vertically — formula must produce a negative y when the
+        # font's bbox top offset (bb[1]) exceeds (canvas_h - text_h)/2.
+        # PIL handles negative y by drawing higher; clamping to 0 leaves
+        # the text sitting at the bottom of the canvas.
+        y = (canvas_h - text_h) // 2 - bb[1]
         draw.text((-bb[0], y), text, fill=255, font=font)
         draw.text((seg_w - bb[0], y), text, fill=255, font=font)
 

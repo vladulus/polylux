@@ -34,10 +34,10 @@ class MatrixLivePreview(_BaseLivePreview):
     """
 
     def sizeHint(self) -> QSize:
-        return QSize(380, 120)
+        return QSize(900, 220)
 
     def minimumSizeHint(self) -> QSize:
-        return QSize(280, 80)
+        return QSize(400, 140)
 
     def paintEvent(self, _ev) -> None:
         p = QPainter(self)
@@ -54,12 +54,11 @@ class MatrixLivePreview(_BaseLivePreview):
         have_data = len(buf) >= lut.TOTAL_BYTES
 
         # Horizontal orientation: rows on X (36 across), cols on Y (7 down).
-        # Compute dot size that fits the available area.
         avail_w = self.width() - 16
         avail_h = self.height() - 16
-        dot_x = max(4, avail_w // (lut.MAX_ROW + 2))  # +2 padding cells
+        dot_x = max(4, avail_w // (lut.MAX_ROW + 2))
         dot_y = max(4, avail_h // (lut.MAX_COL + 1))
-        dot = max(3, min(dot_x, dot_y, 14))             # cap so dots don't dominate
+        dot = max(3, min(dot_x, dot_y, 22))
         gap = max(1, dot // 4)
 
         used_w = lut.MAX_ROW * (dot + gap)
