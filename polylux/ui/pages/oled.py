@@ -26,6 +26,20 @@ METRIC_DISPLAY = {
 }
 
 
+def _clear_layout(layout) -> None:
+    """Recursively detach + delete every widget and layout in `layout`."""
+    while layout.count():
+        item = layout.takeAt(0)
+        w = item.widget()
+        if w is not None:
+            w.deleteLater()
+            continue
+        sub = item.layout()
+        if sub is not None:
+            _clear_layout(sub)
+            sub.deleteLater()
+
+
 class OledPage(DevicePage):
     DEVICE_KEY = "oled"
     DEVICE_TITLE = "OLED Display"
@@ -92,11 +106,7 @@ class OledPage(DevicePage):
         self._render_hw_mode(mode)
 
     def _render_hw_mode(self, mode: str) -> None:
-        while self._metric_holder_v.count():
-            item = self._metric_holder_v.takeAt(0)
-            wid = item.widget()
-            if wid is not None:
-                wid.deleteLater()
+        _clear_layout(self._metric_holder_v)
 
         cfg: OledConfig = self._state.snapshot().oled
         if mode == "single":
