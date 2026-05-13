@@ -316,11 +316,15 @@ def run_oled(chip, state: ServiceState, stop: threading.Event) -> None:
                     src = ocfg.value_source
                     value = _read_value_source(src)
                     label = ocfg.label
+                # OLED firmware renders all text in uppercase — match that
+                # so the preview matches the panel.
+                label = label.upper()
+                value = value.upper()
                 oled.set_text(label, value)
                 state.set_frame("oled", ("text", label, value))
             elif ocfg.scene == "text":
-                full_value = ocfg.value if ocfg.value else "POLYLUX"
-                label = ocfg.label or ""
+                full_value = (ocfg.value if ocfg.value else "POLYLUX").upper()
+                label = (ocfg.label or "").upper()
                 if full_value != last_scroll_value:
                     last_scroll_value = full_value
                     scroll_idx = 0
