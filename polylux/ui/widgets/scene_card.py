@@ -9,10 +9,13 @@ from PyQt6.QtWidgets import QFrame, QLabel, QVBoxLayout, QWidget
 
 
 class SceneCard(QFrame):
-    """Vertical card: top preview area + bottom title strip.
+    """Clickable button-style card with a bordered title strip.
 
     Emits ``clicked_scene(str)`` with the scene_key when left-clicked.
     QSS targets ``QFrame[active="true"]`` for the active state.
+
+    The optional ``preview`` widget is kept for backwards compatibility
+    but currently unused — scenes show as plain bordered buttons.
     """
 
     clicked_scene = pyqtSignal(str)
@@ -30,27 +33,15 @@ class SceneCard(QFrame):
         self.setProperty("active", "false")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setMinimumHeight(56)
 
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
 
-        # Preview area (top)
-        self._preview_container = QFrame()
-        self._preview_container.setObjectName("scene_card_preview")
-        self._preview_container.setMinimumHeight(80)
-        pv = QVBoxLayout(self._preview_container)
-        pv.setContentsMargins(0, 0, 0, 0)
-        pv.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        if preview is not None:
-            pv.addWidget(preview, alignment=Qt.AlignmentFlag.AlignCenter)
-        v.addWidget(self._preview_container)
-
-        # Title strip (bottom)
         self._title = QLabel(title)
         self._title.setObjectName("scene_card_title")
         self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._title.setContentsMargins(0, 8, 0, 8)
         v.addWidget(self._title)
 
     def scene_key(self) -> str:
