@@ -42,6 +42,16 @@ class MatrixPage(DevicePage):
             )
             v.addWidget(QLabel("COLOR"))
             v.addWidget(pick)
+
+            size = SliderRow(label="FONT SIZE", minimum=5, maximum=16,
+                             value=cfg.clock_font_size, fmt="{v}px")
+            size.value_changed.connect(
+                lambda val: self._state.update_device("matrix", {"clock_font_size": val})
+            )
+            v.addWidget(size)
+            hint = QLabel("5 = native 3×5 pixel font, 6+ = Arial Bold")
+            hint.setObjectName("dim")
+            v.addWidget(hint)
         elif scene == "text":
             text_input = QLineEdit(cfg.text)
             text_input.setPlaceholderText("HELLO WORLD")

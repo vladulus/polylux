@@ -68,7 +68,8 @@ class MatrixConfig:
     update_seconds: float = 1.0     # how often the scene re-renders
     brightness: int = 100           # 0-100, applied at frame-build time
     scroll_speed: int = 55          # used in text + image scenes, px-per-frame analog
-    text_font_size: int = 11        # PIL font px-size for scene=text (clock uses fixed bigger)
+    text_font_size: int = 11        # PIL font px-size for scene=text
+    clock_font_size: int = 5        # 5 = native 3×5 pixel font; 6+ = PIL Arial Bold at that px size
     image_path: str = ""            # used when scene=image; PNG/JPG/GIF via PIL
     image_scroll: bool = True       # if image wider than long axis, scroll horizontally
 
@@ -85,6 +86,8 @@ class MatrixConfig:
             raise ValueError(f"matrix.scroll_speed must be 1..100, got {self.scroll_speed}")
         if not 7 <= self.text_font_size <= 16:
             raise ValueError(f"matrix.text_font_size must be 7..16, got {self.text_font_size}")
+        if not 5 <= self.clock_font_size <= 16:
+            raise ValueError(f"matrix.clock_font_size must be 5..16, got {self.clock_font_size}")
 
 
 @dataclass
@@ -213,6 +216,7 @@ def load(path: str | Path = DEFAULT_CONFIG_PATH) -> PolyluxConfig:
     cfg.matrix.brightness = int(m.get("brightness", cfg.matrix.brightness))
     cfg.matrix.scroll_speed = int(m.get("scroll_speed", cfg.matrix.scroll_speed))
     cfg.matrix.text_font_size = int(m.get("text_font_size", cfg.matrix.text_font_size))
+    cfg.matrix.clock_font_size = int(m.get("clock_font_size", cfg.matrix.clock_font_size))
     cfg.matrix.image_path = str(m.get("image_path", cfg.matrix.image_path))
     cfg.matrix.image_scroll = bool(m.get("image_scroll", cfg.matrix.image_scroll))
     if "clock_color" in m:

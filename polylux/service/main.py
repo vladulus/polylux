@@ -101,12 +101,18 @@ def run_matrix(chip, state: ServiceState, stop: threading.Event) -> None:
             frame = Frame()
             if mcfg.scene == "clock":
                 now = datetime.now().strftime("%H:%M")
-                frame.draw_text(
-                    now,
-                    color=scaled_clock_color,
-                    rotation=mcfg.rotation,
-                    font=_matrix_font(11),
-                )
+                if mcfg.clock_font_size <= 5:
+                    # Native 3×5 pixel font — clock-style, pixel-perfect
+                    frame.draw_tiny_text(
+                        now, color=scaled_clock_color, rotation=mcfg.rotation,
+                    )
+                else:
+                    frame.draw_text(
+                        now,
+                        color=scaled_clock_color,
+                        rotation=mcfg.rotation,
+                        font=_matrix_font(mcfg.clock_font_size),
+                    )
             elif mcfg.scene == "text":
                 font = _matrix_font(mcfg.text_font_size)
                 if (mcfg.text != last_text or mcfg.color != last_text_color
