@@ -27,15 +27,21 @@ from . import font_3x5
 
 
 _FONT_CANDIDATES = (
-    # path, size — first match wins. AC-style: bold uppercase chunky strokes.
-    ("C:/Windows/Fonts/consolab.ttf", 9),  # Consolas Bold — thicker verticals
-    ("C:/Windows/Fonts/consola.ttf",  9),  # Consolas Regular fallback
-    ("C:/Windows/Fonts/courbd.ttf",   9),  # Courier New Bold
-    ("C:/Windows/Fonts/cour.ttf",     9),  # Courier New
-    ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf", 9),
+    # path, size — first match wins. AC-style scoreboard look: Arial uppercase.
+    ("C:/Windows/Fonts/arialbd.ttf",  9),  # Arial Bold
+    ("C:/Windows/Fonts/arial.ttf",    9),  # Arial Regular
+    ("C:/Windows/Fonts/consolab.ttf", 9),  # Consolas Bold fallback
+    ("C:/Windows/Fonts/consola.ttf",  9),
+    ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 9),
 )
 
 _cached_matrix_font = None
+
+
+def clear_font_cache() -> None:
+    """Force re-pick the matrix font on next render (used after edits)."""
+    global _cached_matrix_font
+    _cached_matrix_font = None
 
 
 def _matrix_font():
