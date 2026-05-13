@@ -126,9 +126,12 @@ class MatrixConfig:
     scroll_speed: int = 55         # used in text scene, frames/sec analog
 
 class OledConfig:
-    brightness: int = 100          # 0-100, applied via 0xEC 0x14 0xBR? — TODO verify protocol
-    font_size: str = "medium"      # small | medium | large
-    # value_source gains: gpu_pct, fan_rpm
+    brightness: int = 100                          # 0-100, applied via 0xEC 0x14 0xBR? — TODO verify protocol
+    font_size: str = "medium"                      # small | medium | large
+    hw_mode: str = "single"                        # single | rotate
+    rotate_sources: tuple[str, ...] = ("cpu_temp", "gpu_temp", "cpu_pct")  # used when hw_mode=rotate
+    rotate_interval_s: float = 3.0                 # seconds per metric in rotation
+    # value_source gains: gpu_pct, fan_rpm (used only when hw_mode=single)
 
 class AuraRGBConfig:
     brightness: int = 100          # 0-100, multiplied into RGB before send
@@ -161,7 +164,14 @@ Every device tab follows the same vertical structure:
 Subclass-specific:
 
 - **MatrixPage**: scenes = clock / text / fill / off. Scene config: text scene → text input + scroll_speed slider; fill → color picker; clock/off → empty. Common: brightness, rotation seg (0/90/180/270), enabled.
-- **OledPage**: scenes = hardware_monitor / text / preset_gif / off. Scene config: hw_monitor → 6-card metric picker (cpu temp / gpu temp / cpu pct / gpu pct / mem pct / fan rpm) + label override; text → label input + value input; preset_gif → thumbnail grid of factory ROM presets. Common: brightness, refresh rate slider (0.5–5s), font_size seg.
+- **OledPage**: scenes = hardware_monitor / text / preset_gif / off. Scene config:
+    - `hardware_monitor` → MODE seg-button at top (SINGLE / ROTATE).
+      - SINGLE → 6-card metric picker (cpu temp / gpu temp / cpu pct / gpu pct / mem pct / fan rpm) + label override.
+      - ROTATE → same 6 metrics as a multi-checkbox grid (pick which ones to cycle through) + interval slider (1–10s, default 3s). OLED driver cycles through `rotate_sources` showing each for `rotate_interval_s` seconds. Live preview shows the current rotation step.
+    - `text` → label input + value input.
+    - `preset_gif` → thumbnail grid of factory ROM presets.
+
+    Common: brightness, refresh rate slider (0.5–5s), font_size seg.
 - **AuraRGBPage**: scenes = solid / off. Scene config: solid → HSV color picker + 8 preset swatches. Common: brightness, types multi-check (MOTHERBOARD / KEYBOARD / MOUSE / DRAM), enabled.
 - **RyujinPage**: scenes = hardware_monitor / off. Scene config: empty (chip's firmware drives content). Common: enabled. (Smallest tab — minimal v0.4 surface.)
 
