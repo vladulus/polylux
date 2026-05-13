@@ -35,41 +35,43 @@ _FONT_CANDIDATES = (
     ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 9),
 )
 
-_cached_matrix_font = None
+_font_cache: dict = {}
 
 
 def clear_font_cache() -> None:
     """Force re-pick the matrix font on next render (used after edits)."""
-    global _cached_matrix_font
-    _cached_matrix_font = None
+    global _font_cache
+    _font_cache = {}
 
 
-def _matrix_font():
+def _matrix_font(size: int = 9):
     """Return a PIL font picked for the AniMe Matrix's 7-LED short axis.
 
-    Tries a few common Windows / Linux monospace TTFs first, falls back to
-    Pillow's built-in default (DejaVu Sans) at a small pixel size. Cached
-    after first call so the lookup doesn't repeat per frame.
+    Tries Arial Bold, Consolas Bold, Courier on Windows; DejaVu on Linux.
+    Falls back to Pillow's built-in default at the requested pixel size.
+    Cached per-size so repeated frame renders don't re-load.
     """
-    global _cached_matrix_font
-    if _cached_matrix_font is not None:
-        return _cached_matrix_font
+    cached = _font_cache.get(size)
+    if cached is not None:
+        return cached
     try:
         from PIL import ImageFont  # type: ignore
     except ImportError:
         return None
-    for path, size in _FONT_CANDIDATES:
+    for path, _default_size in _FONT_CANDIDATES:
         if _os.path.exists(path):
             try:
-                _cached_matrix_font = ImageFont.truetype(path, size)
-                return _cached_matrix_font
+                font = ImageFont.truetype(path, size)
+                _font_cache[size] = font
+                return font
             except Exception:
                 continue
     try:
-        _cached_matrix_font = ImageFont.load_default(size=8)
+        font = ImageFont.load_default(size=size)
     except TypeError:
-        _cached_matrix_font = ImageFont.load_default()
-    return _cached_matrix_font
+        font = ImageFont.load_default()
+    _font_cache[size] = font
+    return font
 
 
 RGB = Tuple[int, int, int]
@@ -261,6 +263,67 @@ class Frame:
         for col, row in lut.ALL_COORDS:
             if px[col - 1, row - 1] > 127:
                 self._set_rgb(col, row, r_v, g_v, b_v)
+
+    def draw_image_scrolled(
+        self,
+        image: "PIL.Image.Image",  # type: ignore[name-defined]
+        offset_px: int,
+        *,
+        rotation: int = 90,
+        gap_px: int = 4,
+    ) -> int:
+        """Render a scrolling horizontal slice of `image` onto the matrix.
+
+        The image is first rescaled to the matrix's short-axis height (7 px)
+        preserving its aspect ratio, then duplicated end-to-end with a
+        configurable gap to produce a seamless marquee canvas. A
+        long-axis-wide window starting at ``offset_px`` is cropped and
+        projected onto the LED grid using the rotation rules from
+        ``draw_image``.
+
+        Returns the segment width (scaled_w + gap_px) so the caller can wrap
+        ``offset_px`` modulo this value.
+        """
+        try:
+            from PIL import Image  # type: ignore
+        except ImportError as ex:
+            raise RuntimeError("Pillow is required for draw_image_scrolled") from ex
+
+        if rotation not in (0, 90, 180, 270):
+            raise ValueError(f"rotation must be 0, 90, 180, or 270; got {rotation}")
+
+        if rotation in (90, 270):
+            win_w, canvas_h = lut.MAX_ROW, lut.MAX_COL    # 36 × 7
+        else:
+            win_w, canvas_h = lut.MAX_COL, lut.MAX_ROW    # 7 × 36
+
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        aspect = image.width / max(image.height, 1)
+        scaled_h = canvas_h
+        scaled_w = max(1, int(round(aspect * scaled_h)))
+        scaled = image.resize((scaled_w, scaled_h), resample=Image.NEAREST)
+
+        seg_w = scaled_w + max(1, gap_px)
+        wide = Image.new("RGB", (seg_w * 2, canvas_h), (0, 0, 0))
+        wide.paste(scaled, (0, 0))
+        wide.paste(scaled, (seg_w, 0))
+
+        off = offset_px % seg_w
+        window = wide.crop((off, 0, off + win_w, canvas_h))
+
+        if rotation == 90:
+            window = window.transpose(Image.ROTATE_270)
+        elif rotation == 180:
+            window = window.transpose(Image.ROTATE_180)
+        elif rotation == 270:
+            window = window.transpose(Image.ROTATE_90)
+
+        px = window.load()
+        for col, row in lut.ALL_COORDS:
+            r, g, b = px[col - 1, row - 1]
+            self._set_rgb(col, row, r, g, b)
+        return seg_w
 
     def draw_text_scrolled(
         self,

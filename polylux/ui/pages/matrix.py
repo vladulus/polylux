@@ -35,7 +35,14 @@ class MatrixPage(DevicePage):
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(14)
 
-        if scene == "text":
+        if scene == "clock":
+            pick = ColorPicker(color=cfg.clock_color)
+            pick.color_changed.connect(
+                lambda c: self._state.update_device("matrix", {"clock_color": c})
+            )
+            v.addWidget(QLabel("COLOR"))
+            v.addWidget(pick)
+        elif scene == "text":
             text_input = QLineEdit(cfg.text)
             text_input.setPlaceholderText("HELLO WORLD")
             text_input.textChanged.connect(
@@ -50,6 +57,13 @@ class MatrixPage(DevicePage):
             )
             v.addWidget(QLabel("COLOR"))
             v.addWidget(pick)
+
+            size = SliderRow(label="FONT SIZE", minimum=7, maximum=16,
+                             value=cfg.text_font_size, fmt="{v}px")
+            size.value_changed.connect(
+                lambda val: self._state.update_device("matrix", {"text_font_size": val})
+            )
+            v.addWidget(size)
 
             spd = SliderRow(label="SCROLL SPEED", minimum=1, maximum=100,
                             value=cfg.scroll_speed, fmt="{v}")
@@ -71,9 +85,23 @@ class MatrixPage(DevicePage):
             row.addWidget(btn)
             v.addWidget(QLabel("IMAGE FILE"))
             v.addLayout(row)
-            hint = QLabel("Any PNG / JPG / BMP. Scaled to 7×36 LED grid.")
+            hint = QLabel("PNG / JPG / BMP / GIF. Scaled to 7-LED short axis; GIFs animate.")
             hint.setObjectName("dim")
             v.addWidget(hint)
+
+            scroll_cb = QCheckBox("SCROLL HORIZONTALLY (wide images)")
+            scroll_cb.setChecked(cfg.image_scroll)
+            scroll_cb.toggled.connect(
+                lambda on: self._state.update_device("matrix", {"image_scroll": on})
+            )
+            v.addWidget(scroll_cb)
+
+            spd = SliderRow(label="SCROLL SPEED", minimum=1, maximum=100,
+                            value=cfg.scroll_speed, fmt="{v}")
+            spd.value_changed.connect(
+                lambda val: self._state.update_device("matrix", {"scroll_speed": val})
+            )
+            v.addWidget(spd)
         else:
             lbl = QLabel("(no extra config)")
             lbl.setObjectName("dim")
