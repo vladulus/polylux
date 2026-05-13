@@ -31,3 +31,22 @@ def test_radial_gauge_clamps_below_min(qtbot, qapp):
     assert g.value() == 0
     g.set_value(150.0)
     assert g.value() == 100
+
+
+def test_scene_card_click_emits_signal(qtbot, qapp):
+    from polylux.ui.widgets.scene_card import SceneCard
+    c = SceneCard(scene_key="clock", title="CLOCK")
+    qtbot.addWidget(c)
+    with qtbot.waitSignal(c.clicked_scene, timeout=500) as blocker:
+        qtbot.mouseClick(c, Qt.MouseButton.LeftButton)
+    assert blocker.args == ["clock"]
+
+
+def test_scene_card_active_property(qtbot, qapp):
+    from polylux.ui.widgets.scene_card import SceneCard
+    c = SceneCard(scene_key="text", title="TEXT")
+    qtbot.addWidget(c)
+    assert c.is_active() is False
+    c.set_active(True)
+    assert c.is_active() is True
+    assert c.property("active") == "true"
