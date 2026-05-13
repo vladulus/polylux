@@ -37,12 +37,21 @@ log = logging.getLogger("polylux")
 
 
 def run_matrix(chip, state: ServiceState, stop: threading.Event) -> None:
-    from polylux.drivers.anime_matrix import AniMeMatrix
+    from polylux.drivers.anime_matrix import AniMeMatrix, lut
     from polylux.drivers.anime_matrix.render import Frame
 
     matrix = AniMeMatrix(chip=chip)
     last_scene = None
     off_done = False
+
+    # Text scene scroll state
+    last_text = None
+    last_text_color = None
+    last_text_rotation = None
+    text_fits = True
+    text_seg_w = 1
+    scroll_offset = 0
+    SCROLL_FPS = 30.0
 
     while not stop.is_set():
         mcfg = state.snapshot().matrix
@@ -53,7 +62,6 @@ def run_matrix(chip, state: ServiceState, stop: threading.Event) -> None:
         if mcfg.scene == "off":
             if not off_done:
                 try:
-                    # Black frame once — actually clears the matrix
                     black = Frame().to_bytes()
                     matrix.send_frame(black)
                     state.set_frame("matrix", black)
@@ -64,16 +72,36 @@ def run_matrix(chip, state: ServiceState, stop: threading.Event) -> None:
             stop.wait(mcfg.update_seconds)
             continue
 
+        is_scrolling_text = False
         try:
             frame = Frame()
             if mcfg.scene == "clock":
                 now = datetime.now().strftime("%H:%M")
                 frame.draw_tiny_text(now, color=mcfg.color, rotation=mcfg.rotation)
             elif mcfg.scene == "text":
-                # Use PIL-based draw_text so any character (letters, digits,
-                # punctuation) renders. draw_tiny_text's 3x5 font is digits+
-                # clock-symbols only and would silently render letters as blanks.
-                frame.draw_text(mcfg.text, color=mcfg.color, rotation=mcfg.rotation)
+                if (mcfg.text != last_text or mcfg.color != last_text_color
+                        or mcfg.rotation != last_text_rotation):
+                    last_text = mcfg.text
+                    last_text_color = mcfg.color
+                    last_text_rotation = mcfg.rotation
+                    scroll_offset = 0
+                    if mcfg.text:
+                        long_axis = lut.MAX_ROW if mcfg.rotation in (90, 270) else lut.MAX_COL
+                        tw, _ = frame.measure_text(mcfg.text)
+                        text_fits = tw <= long_axis
+                        text_seg_w = max(1, tw + 8)
+                    else:
+                        text_fits = True
+                if mcfg.text and not text_fits:
+                    frame.draw_text_scrolled(
+                        mcfg.text, scroll_offset,
+                        color=mcfg.color, rotation=mcfg.rotation,
+                    )
+                    px_per_frame = max(1, mcfg.scroll_speed // 15)
+                    scroll_offset = (scroll_offset + px_per_frame) % text_seg_w
+                    is_scrolling_text = True
+                elif mcfg.text:
+                    frame.draw_text(mcfg.text, color=mcfg.color, rotation=mcfg.rotation)
             elif mcfg.scene == "image" and mcfg.image_path:
                 try:
                     from PIL import Image
@@ -89,10 +117,12 @@ def run_matrix(chip, state: ServiceState, stop: threading.Event) -> None:
             state.mark_update("matrix", error=str(ex))
             log.warning("matrix send_frame failed: %s", ex)
 
+        target_sleep = (1.0 / SCROLL_FPS) if is_scrolling_text else mcfg.update_seconds
         slept = 0.0
-        while slept < mcfg.update_seconds and not stop.is_set():
-            time.sleep(min(0.1, mcfg.update_seconds - slept))
-            slept += 0.1
+        step = min(0.05, target_sleep)
+        while slept < target_sleep and not stop.is_set():
+            time.sleep(step)
+            slept += step
 
 
 def _read_value_source(source: str) -> str:

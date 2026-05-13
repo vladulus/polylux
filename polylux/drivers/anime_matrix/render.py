@@ -215,6 +215,96 @@ class Frame:
             if px[col - 1, row - 1] > 127:
                 self._set_rgb(col, row, r_v, g_v, b_v)
 
+    def draw_text_scrolled(
+        self,
+        text: str,
+        offset_px: int,
+        *,
+        color: RGB = WHITE,
+        font: Optional["PIL.ImageFont.ImageFont"] = None,  # type: ignore[name-defined]
+        rotation: int = 90,
+        gap_px: int = 8,
+    ) -> int:
+        """Render a horizontally scrolling view of `text` onto the matrix.
+
+        Builds a wide PIL canvas containing the text twice (back-to-back with
+        a configurable gap) so cropping a moving window produces a seamless
+        looping marquee. Returns the segment width (text_w + gap_px) — the
+        caller wraps ``offset_px`` modulo this value to keep scrolling
+        forever without drift.
+
+        Use this for long messages that don't fit on the matrix's long axis
+        (36 LEDs at rotation 90/270, 7 LEDs at rotation 0/180). For short
+        text, ``draw_text`` produces a centred static rendering.
+        """
+        try:
+            from PIL import Image, ImageDraw, ImageFont  # type: ignore
+        except ImportError as ex:
+            raise RuntimeError("Pillow is required for draw_text_scrolled") from ex
+
+        if rotation not in (0, 90, 180, 270):
+            raise ValueError(f"rotation must be 0, 90, 180, or 270; got {rotation}")
+        if font is None:
+            font = ImageFont.load_default()
+
+        if rotation in (90, 270):
+            win_w, canvas_h = lut.MAX_ROW, lut.MAX_COL
+        else:
+            win_w, canvas_h = lut.MAX_COL, lut.MAX_ROW
+
+        # Measure text once
+        probe = ImageDraw.Draw(Image.new("L", (1, 1)))
+        bb = probe.textbbox((0, 0), text, font=font)
+        text_w = bb[2] - bb[0]
+        text_h = bb[3] - bb[1]
+        if text_w <= 0:
+            return 1
+
+        seg_w = text_w + max(1, gap_px)
+        wide_w = seg_w * 2
+
+        wide = Image.new("L", (wide_w, canvas_h), 0)
+        draw = ImageDraw.Draw(wide)
+        y = max(0, (canvas_h - text_h) // 2 - bb[1])
+        draw.text((-bb[0], y), text, fill=255, font=font)
+        draw.text((seg_w - bb[0], y), text, fill=255, font=font)
+
+        off = offset_px % seg_w
+        window = wide.crop((off, 0, off + win_w, canvas_h))
+
+        if rotation == 90:
+            window = window.transpose(Image.ROTATE_270)
+        elif rotation == 180:
+            window = window.transpose(Image.ROTATE_180)
+        elif rotation == 270:
+            window = window.transpose(Image.ROTATE_90)
+
+        px = window.load()
+        r_v, g_v, b_v = _clip_rgb(color)
+        for col, row in lut.ALL_COORDS:
+            if px[col - 1, row - 1] > 127:
+                self._set_rgb(col, row, r_v, g_v, b_v)
+        return seg_w
+
+    def measure_text(
+        self,
+        text: str,
+        *,
+        font: Optional["PIL.ImageFont.ImageFont"] = None,  # type: ignore[name-defined]
+    ) -> tuple[int, int]:
+        """Return (width_px, height_px) for ``text`` rendered with the given
+        PIL font (default font when None). Used by callers to decide between
+        static draw vs scrolling marquee.
+        """
+        try:
+            from PIL import Image, ImageDraw, ImageFont  # type: ignore
+        except ImportError as ex:
+            raise RuntimeError("Pillow is required for measure_text") from ex
+        if font is None:
+            font = ImageFont.load_default()
+        bb = ImageDraw.Draw(Image.new("L", (1, 1))).textbbox((0, 0), text, font=font)
+        return (bb[2] - bb[0], bb[3] - bb[1])
+
     def draw_tiny_text(
         self,
         text: str,
