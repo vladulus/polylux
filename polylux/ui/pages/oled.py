@@ -64,15 +64,15 @@ class OledPage(DevicePage):
         elif scene == "text":
             label_in = QLineEdit(cfg.label)
             label_in.setPlaceholderText("LABEL")
-            label_in.editingFinished.connect(
-                lambda: self._state.update_device("oled", {"label": label_in.text()})
+            label_in.textChanged.connect(
+                lambda txt: self._state.update_device("oled", {"label": txt})
             )
             v.addWidget(QLabel("LABEL"))
             v.addWidget(label_in)
             value_in = QLineEdit(cfg.value)
             value_in.setPlaceholderText("VALUE")
-            value_in.editingFinished.connect(
-                lambda: self._state.update_device("oled", {"value": value_in.text()})
+            value_in.textChanged.connect(
+                lambda txt: self._state.update_device("oled", {"value": txt})
             )
             v.addWidget(QLabel("VALUE"))
             v.addWidget(value_in)
@@ -115,8 +115,8 @@ class OledPage(DevicePage):
 
             self._metric_holder_v.addWidget(QLabel("LABEL OVERRIDE"))
             li = QLineEdit(cfg.label)
-            li.editingFinished.connect(
-                lambda: self._state.update_device("oled", {"label": li.text()})
+            li.textChanged.connect(
+                lambda txt: self._state.update_device("oled", {"label": txt})
             )
             self._metric_holder_v.addWidget(li)
         else:

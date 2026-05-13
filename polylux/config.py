@@ -67,8 +67,9 @@ class MatrixConfig:
     update_seconds: float = 1.0     # how often the scene re-renders
     brightness: int = 100           # 0-100, applied at frame-build time
     scroll_speed: int = 55          # used in text scene, frames-per-tick analog
+    image_path: str = ""            # used when scene=image; PNG/JPG/etc. via PIL
 
-    SCENES = ("clock", "text", "fill", "off")
+    SCENES = ("clock", "text", "image", "off")
 
     def validate(self) -> None:
         if self.scene not in self.SCENES:
@@ -206,6 +207,7 @@ def load(path: str | Path = DEFAULT_CONFIG_PATH) -> PolyluxConfig:
     cfg.matrix.update_seconds = float(m.get("update_seconds", cfg.matrix.update_seconds))
     cfg.matrix.brightness = int(m.get("brightness", cfg.matrix.brightness))
     cfg.matrix.scroll_speed = int(m.get("scroll_speed", cfg.matrix.scroll_speed))
+    cfg.matrix.image_path = str(m.get("image_path", cfg.matrix.image_path))
 
     o = raw.get("oled") or {}
     cfg.oled.enabled = bool(o.get("enabled", False))

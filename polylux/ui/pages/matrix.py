@@ -1,8 +1,11 @@
 """Matrix page — scenes: clock / text / fill / off."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from PyQt6.QtWidgets import (
-    QCheckBox, QLabel, QLineEdit, QVBoxLayout, QWidget,
+    QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+    QVBoxLayout, QWidget,
 )
 
 from polylux.ui.pages.base import DevicePage
@@ -21,7 +24,7 @@ class MatrixPage(DevicePage):
         return [
             ("clock", "CLOCK", None),
             ("text",  "TEXT",  None),
-            ("fill",  "FILL",  None),
+            ("image", "IMAGE", None),
             ("off",   "OFF",   None),
         ]
 
@@ -35,11 +38,18 @@ class MatrixPage(DevicePage):
         if scene == "text":
             text_input = QLineEdit(cfg.text)
             text_input.setPlaceholderText("HELLO WORLD")
-            text_input.editingFinished.connect(
-                lambda: self._state.update_device("matrix", {"text": text_input.text()})
+            text_input.textChanged.connect(
+                lambda txt: self._state.update_device("matrix", {"text": txt})
             )
             v.addWidget(QLabel("MESSAGE"))
             v.addWidget(text_input)
+
+            pick = ColorPicker(color=cfg.color)
+            pick.color_changed.connect(
+                lambda c: self._state.update_device("matrix", {"color": c})
+            )
+            v.addWidget(QLabel("COLOR"))
+            v.addWidget(pick)
 
             spd = SliderRow(label="SCROLL SPEED", minimum=1, maximum=100,
                             value=cfg.scroll_speed, fmt="{v}")
@@ -47,19 +57,38 @@ class MatrixPage(DevicePage):
                 lambda val: self._state.update_device("matrix", {"scroll_speed": val})
             )
             v.addWidget(spd)
-        elif scene == "fill":
-            pick = ColorPicker(color=cfg.color)
-            pick.color_changed.connect(
-                lambda c: self._state.update_device("matrix", {"color": c})
+        elif scene == "image":
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            self._image_path_lbl = QLabel(
+                Path(cfg.image_path).name if cfg.image_path else "(no image selected)"
             )
-            v.addWidget(QLabel("COLOR"))
-            v.addWidget(pick)
+            self._image_path_lbl.setObjectName("dim")
+            self._image_path_lbl.setWordWrap(True)
+            row.addWidget(self._image_path_lbl, 1)
+            btn = QPushButton("Browse…")
+            btn.clicked.connect(self._on_pick_image)
+            row.addWidget(btn)
+            v.addWidget(QLabel("IMAGE FILE"))
+            v.addLayout(row)
+            hint = QLabel("Any PNG / JPG / BMP. Scaled to 7×36 LED grid.")
+            hint.setObjectName("dim")
+            v.addWidget(hint)
         else:
             lbl = QLabel("(no extra config)")
             lbl.setObjectName("dim")
             v.addWidget(lbl)
         v.addStretch(1)
         return w
+
+    def _on_pick_image(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Pick image for matrix",
+            "", "Images (*.png *.jpg *.jpeg *.bmp *.gif);;All files (*.*)",
+        )
+        if path:
+            self._state.update_device("matrix", {"image_path": path})
+            self._image_path_lbl.setText(Path(path).name)
 
     def build_common_config(self) -> QWidget:
         cfg = self._state.snapshot().matrix

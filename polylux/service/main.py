@@ -71,8 +71,13 @@ def run_matrix(chip, state: ServiceState, stop: threading.Event) -> None:
                 frame.draw_tiny_text(now, color=mcfg.color, rotation=mcfg.rotation)
             elif mcfg.scene == "text":
                 frame.draw_tiny_text(mcfg.text, color=mcfg.color, rotation=mcfg.rotation)
-            elif mcfg.scene == "fill":
-                frame.fill(mcfg.color)
+            elif mcfg.scene == "image" and mcfg.image_path:
+                try:
+                    from PIL import Image
+                    img = Image.open(mcfg.image_path)
+                    frame.draw_image(img)
+                except Exception as ex:
+                    log.warning("matrix image scene: %s — %s", mcfg.image_path, ex)
             frame_bytes = frame.to_bytes()
             matrix.send_frame(frame_bytes)
             state.set_frame("matrix", frame_bytes)
