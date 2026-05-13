@@ -202,7 +202,7 @@ class DashboardPage(QWidget):
             for card in self._fan_cards:
                 card.set_value("—", 0)
             self._lhm_notice.setText(
-                f"Install LibreHardwareMonitor for fan readings ({err or 'service not running'})"
+                "Install LibreHardwareMonitor for fan readings  →  github.com/LibreHardwareMonitor/LibreHardwareMonitor"
             )
 
         used, total = _mem_used_gb()
