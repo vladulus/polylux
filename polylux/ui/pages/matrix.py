@@ -1,11 +1,30 @@
-"""Matrix page — placeholder until Task 17."""
-from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
+"""Matrix page — scenes: clock / text / fill / off."""
+from __future__ import annotations
 
-from polylux.ui.state import ServiceState
+from PyQt6.QtWidgets import QLabel, QWidget
+
+from polylux.ui.pages.base import DevicePage
+from polylux.ui.widgets.live_preview import MatrixLivePreview
 
 
-class MatrixPage(QWidget):
-    def __init__(self, state: ServiceState) -> None:
-        super().__init__()
-        v = QVBoxLayout(self)
-        v.addWidget(QLabel("Anime Matrix — coming soon"))
+class MatrixPage(DevicePage):
+    DEVICE_KEY = "matrix"
+    DEVICE_TITLE = "Anime Matrix"
+    DEVICE_SUBTITLE = "DEV 2 · CHIP 1845"
+
+    def _scenes(self):
+        return [
+            ("clock", "CLOCK", None),
+            ("text",  "TEXT",  None),
+            ("fill",  "FILL",  None),
+            ("off",   "OFF",   None),
+        ]
+
+    def build_scene_config(self, scene: str) -> QWidget:
+        return QLabel(f"(scene config for {scene} — Task 17)")
+
+    def build_common_config(self) -> QWidget:
+        return QLabel("(common config — Task 17)")
+
+    def build_live_preview(self) -> QWidget:
+        return MatrixLivePreview()
