@@ -21,9 +21,9 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction, QIcon, QPainter, QPixmap, QColor, QFont, QFontDatabase
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 
+from polylux.ui.main_window import MainWindow
 from polylux.ui.skin import load_skin
 from polylux.ui.state import ServiceState, build_state
-from polylux.ui.window import PolyluxWindow
 
 
 log = logging.getLogger(__name__)
@@ -65,7 +65,7 @@ class PolyluxApp:
         if default_font.pointSize() <= 0:
             default_font.setPointSize(10)
         self._app.setFont(default_font)
-        self._window = PolyluxWindow(state=state, skin=self._skin)
+        self._window = MainWindow(state=state, skin=self._skin)
         self._tray = self._build_tray()
 
     def _build_tray(self) -> QSystemTrayIcon:
