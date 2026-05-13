@@ -42,6 +42,7 @@ class SceneCard(QFrame):
         self._title = QLabel(title)
         self._title.setObjectName("scene_card_title")
         self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._title.setContentsMargins(0, 14, 0, 14)
         v.addWidget(self._title)
 
     def scene_key(self) -> str:
