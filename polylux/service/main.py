@@ -277,17 +277,34 @@ def run_oled(chip, state: ServiceState, stop: threading.Event) -> None:
     last_scene = None
     one_shot_done = False
 
+    # Scroll state for long text values
+    SCROLL_THRESHOLD = 16
+    SCROLL_FPS = 5.0
+    last_scroll_value = None
+    scroll_idx = 0
+
+    # Brightness state — try the speculative `0xEC 0x14 <level>` opcode.
+    # If the chip doesn't honor it, the slider becomes a no-op (slider
+    # still moves in UI but display doesn't dim). See docs §9.2-ish.
+    last_brightness = None
+
     while not stop.is_set():
         ocfg = state.snapshot().oled
         if ocfg.scene != last_scene:
             one_shot_done = False
-            # Force OLED to re-send ec 51 09 (text mode) on next set_text.
-            # Without this, switching away from preset_gif/off back to
-            # text/hw_monitor is sticky — driver caches "text mode armed"
-            # but chip is actually in preset mode.
             oled._text_mode_armed = False
             last_scene = ocfg.scene
 
+        # Push brightness when it changes
+        if ocfg.brightness != last_brightness:
+            try:
+                level = max(0, min(255, int(ocfg.brightness * 2.55)))
+                chip.hid_write(bytes([0xEC, 0x14, level]) + b"\x00" * 62)
+            except Exception as ex:
+                log.debug("OLED brightness write failed: %s", ex)
+            last_brightness = ocfg.brightness
+
+        is_scrolling = False
         try:
             if ocfg.scene == "hardware_monitor":
                 if ocfg.hw_mode == "rotate" and ocfg.rotate_sources:
@@ -302,19 +319,27 @@ def run_oled(chip, state: ServiceState, stop: threading.Event) -> None:
                 oled.set_text(label, value)
                 state.set_frame("oled", ("text", label, value))
             elif ocfg.scene == "text":
-                # Single-line free text. Use ocfg.value (or fallback) as
-                # the displayed string. Label intentionally empty so the
-                # OLED isn't littered with leftover hardware_monitor labels.
-                text = ocfg.value if ocfg.value else "POLYLUX"
-                oled.set_text("", text)
-                state.set_frame("oled", ("text", "", text))
+                full_value = ocfg.value if ocfg.value else "POLYLUX"
+                label = ocfg.label or ""
+                if full_value != last_scroll_value:
+                    last_scroll_value = full_value
+                    scroll_idx = 0
+                if len(full_value) > SCROLL_THRESHOLD:
+                    padded = full_value + "   "
+                    idx = scroll_idx % len(padded)
+                    window = (padded + padded)[idx:idx + SCROLL_THRESHOLD]
+                    oled.set_text(label, window)
+                    state.set_frame("oled", ("text", label, window))
+                    scroll_idx += 1
+                    is_scrolling = True
+                else:
+                    oled.set_text(label, full_value)
+                    state.set_frame("oled", ("text", label, full_value))
             elif ocfg.scene == "preset_gif" and not one_shot_done:
                 chip.hid_write(bytes([0xEC, 0x51, 0x10]) + b"\x00" * 62)
                 state.set_frame("oled", ("preset_gif", ocfg.preset_index))
                 one_shot_done = True
             elif ocfg.scene == "off" and not one_shot_done:
-                # Actually clear the OLED: empty text + return to data-input.
-                # Without this, the previous content stays on the display.
                 oled.set_text("", "")
                 chip.hid_write(bytes([0xEC, 0x51, 0x15]) + b"\x00" * 62)
                 state.set_frame("oled", ("off",))
@@ -324,10 +349,12 @@ def run_oled(chip, state: ServiceState, stop: threading.Event) -> None:
             state.mark_update("oled", error=str(ex))
             log.warning("oled update failed: %s", ex)
 
+        target_sleep = (1.0 / SCROLL_FPS) if is_scrolling else ocfg.update_seconds
         slept = 0.0
-        while slept < ocfg.update_seconds and not stop.is_set():
-            time.sleep(min(0.1, ocfg.update_seconds - slept))
-            slept += 0.1
+        step = min(0.1, target_sleep)
+        while slept < target_sleep and not stop.is_set():
+            time.sleep(step)
+            slept += step
 
 
 def run_aura_rgb(state: ServiceState, stop: threading.Event) -> None:
