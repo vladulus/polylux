@@ -37,3 +37,6 @@ config.local.yaml
 # Polylux fetches them at install-time via scripts/install.py — never
 # commit binaries to the repo.
 tools/
+
+# Brainstorming session content (mockups, state) — regenerated per session.
+.superpowers/
