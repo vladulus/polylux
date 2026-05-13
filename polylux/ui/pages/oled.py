@@ -174,36 +174,22 @@ class OledPage(DevicePage):
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(14)
 
-        bri = SliderRow(label="BRIGHTNESS", minimum=0, maximum=100,
-                        value=cfg.brightness, fmt="{v}")
-        bri.value_changed.connect(
-            lambda val: self._state.update_device("oled", {"brightness": val})
-        )
-        v.addWidget(bri)
-
-        rate = SliderRow(label="REFRESH RATE (sec)", minimum=1, maximum=10,
-                         value=int(round(cfg.update_seconds)), fmt="{v}s")
-        rate.value_changed.connect(
-            lambda val: self._state.update_device("oled", {"update_seconds": float(val)})
-        )
-        v.addWidget(rate)
-
-        size = SegButton(
-            options=[("SMALL", "small"), ("MEDIUM", "medium"), ("LARGE", "large")],
-            value=cfg.font_size,
-        )
-        size.value_changed.connect(
-            lambda val: self._state.update_device("oled", {"font_size": val})
-        )
-        v.addWidget(QLabel("FONT SIZE"))
-        v.addWidget(size)
-
         enable = QCheckBox("ENABLED")
         enable.setChecked(cfg.enabled)
         enable.toggled.connect(
             lambda on: self._state.update_device("oled", {"enabled": on})
         )
         v.addWidget(enable)
+
+        # Hidden for v0.4: brightness (chip ignores EC 14 opcode), font_size
+        # (not implemented in driver), refresh_rate (driver auto-paces).
+        # Re-introduce when the protocol is verified or driver gains the
+        # capability.
+        note = QLabel("brightness / font size / refresh rate\nnot supported by chip firmware (v0.4)")
+        note.setObjectName("dim")
+        note.setWordWrap(True)
+        v.addWidget(note)
+
         v.addStretch(1)
         return w
 
