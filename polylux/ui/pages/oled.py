@@ -90,6 +90,13 @@ class OledPage(DevicePage):
             )
             v.addWidget(QLabel("VALUE"))
             v.addWidget(value_in)
+
+            spd = SliderRow(label="SCROLL SPEED (>16 chars)", minimum=1, maximum=100,
+                            value=cfg.scroll_speed, fmt="{v}")
+            spd.value_changed.connect(
+                lambda val: self._state.update_device("oled", {"scroll_speed": val})
+            )
+            v.addWidget(spd)
         elif scene == "preset_gif":
             lbl = QLabel(f"(preset thumbnails — v0.5, currently index={cfg.preset_index})")
             lbl.setObjectName("dim")

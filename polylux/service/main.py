@@ -279,7 +279,6 @@ def run_oled(chip, state: ServiceState, stop: threading.Event) -> None:
 
     # Scroll state for long text values
     SCROLL_THRESHOLD = 16
-    SCROLL_FPS = 5.0
     last_scroll_value = None
     scroll_idx = 0
 
@@ -353,7 +352,9 @@ def run_oled(chip, state: ServiceState, stop: threading.Event) -> None:
             state.mark_update("oled", error=str(ex))
             log.warning("oled update failed: %s", ex)
 
-        target_sleep = (1.0 / SCROLL_FPS) if is_scrolling else ocfg.update_seconds
+        # scroll_speed 1-100 → chars per second 0.1..10; 1 char per frame
+        scroll_fps = max(0.1, ocfg.scroll_speed / 10.0)
+        target_sleep = (1.0 / scroll_fps) if is_scrolling else ocfg.update_seconds
         slept = 0.0
         step = min(0.1, target_sleep)
         while slept < target_sleep and not stop.is_set():

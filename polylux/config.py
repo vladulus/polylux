@@ -104,6 +104,7 @@ class OledConfig:
     hw_mode: str = "single"          # single | rotate
     rotate_sources: tuple[str, ...] = ("cpu_temp", "gpu_temp", "cpu_pct")
     rotate_interval_s: float = 3.0
+    scroll_speed: int = 50           # 1..100, used when text scene value exceeds 16 chars
 
     SCENES = ("hardware_monitor", "text", "preset_gif", "off")
     VALUE_SOURCES = (
@@ -126,6 +127,8 @@ class OledConfig:
             raise ValueError(f"oled.brightness must be 0..100, got {self.brightness}")
         if not 0.5 <= self.rotate_interval_s <= 30.0:
             raise ValueError(f"oled.rotate_interval_s must be 0.5..30.0, got {self.rotate_interval_s}")
+        if not 1 <= self.scroll_speed <= 100:
+            raise ValueError(f"oled.scroll_speed must be 1..100, got {self.scroll_speed}")
         if self.hw_mode == "rotate":
             bad = [s for s in self.rotate_sources if s not in self.VALUE_SOURCES]
             if bad:
@@ -236,6 +239,7 @@ def load(path: str | Path = DEFAULT_CONFIG_PATH) -> PolyluxConfig:
     if "rotate_sources" in o and isinstance(o["rotate_sources"], list):
         cfg.oled.rotate_sources = tuple(str(s) for s in o["rotate_sources"])
     cfg.oled.rotate_interval_s = float(o.get("rotate_interval_s", cfg.oled.rotate_interval_s))
+    cfg.oled.scroll_speed = int(o.get("scroll_speed", cfg.oled.scroll_speed))
 
     r = raw.get("ryujin_lcd") or {}
     cfg.ryujin_lcd.enabled = bool(r.get("enabled", False))
