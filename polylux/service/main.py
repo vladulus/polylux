@@ -51,7 +51,8 @@ def run_matrix(chip, state: ServiceState, stop: threading.Event) -> None:
     text_fits = True
     text_seg_w = 1
     scroll_offset = 0
-    SCROLL_FPS = 30.0
+    scroll_offset_f = 0.0   # fractional accumulator for sub-pixel speeds
+    SCROLL_FPS = 20.0
 
     while not stop.is_set():
         mcfg = state.snapshot().matrix
@@ -103,8 +104,10 @@ def run_matrix(chip, state: ServiceState, stop: threading.Event) -> None:
                         mcfg.text, scroll_offset,
                         color=scaled_color, rotation=mcfg.rotation,
                     )
-                    px_per_frame = max(1, mcfg.scroll_speed // 15)
-                    scroll_offset = (scroll_offset + px_per_frame) % text_seg_w
+                    # scroll_speed (1-100) → px/sec  ≈ scroll_speed × 0.3
+                    # at fps=20 → px/frame = scroll_speed / 66.7
+                    scroll_offset_f = (scroll_offset_f + mcfg.scroll_speed / 66.7) % text_seg_w
+                    scroll_offset = int(scroll_offset_f)
                     is_scrolling_text = True
                 elif mcfg.text:
                     frame.draw_text(mcfg.text, color=scaled_color, rotation=mcfg.rotation)
