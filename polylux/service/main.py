@@ -54,7 +54,9 @@ def run_matrix(chip, state: ServiceState, stop: threading.Event) -> None:
             if not off_done:
                 try:
                     # Black frame once — actually clears the matrix
-                    matrix.send_frame(Frame().to_bytes())
+                    black = Frame().to_bytes()
+                    matrix.send_frame(black)
+                    state.set_frame("matrix", black)
                     off_done = True
                 except Exception as ex:
                     log.warning("matrix clear failed: %s", ex)
@@ -71,7 +73,9 @@ def run_matrix(chip, state: ServiceState, stop: threading.Event) -> None:
                 frame.draw_tiny_text(mcfg.text, color=mcfg.color, rotation=mcfg.rotation)
             elif mcfg.scene == "fill":
                 frame.fill(mcfg.color)
-            matrix.send_frame(frame.to_bytes())
+            frame_bytes = frame.to_bytes()
+            matrix.send_frame(frame_bytes)
+            state.set_frame("matrix", frame_bytes)
             state.mark_update("matrix")
         except Exception as ex:
             state.mark_update("matrix", error=str(ex))
@@ -118,7 +122,40 @@ def _read_value_source(source: str) -> str:
                 pynvml.nvmlShutdown()
         except Exception:
             return "?"
+    if source == "gpu_pct":
+        try:
+            import pynvml
+            pynvml.nvmlInit()
+            try:
+                h = pynvml.nvmlDeviceGetHandleByIndex(0)
+                u = pynvml.nvmlDeviceGetUtilizationRates(h)
+                return f"{u.gpu}%"
+            finally:
+                pynvml.nvmlShutdown()
+        except Exception:
+            return "?"
+    if source == "fan_rpm":
+        try:
+            from polylux.sensors.lhm import LHMSensors
+            fans = LHMSensors().fans()
+            if fans:
+                return f"{fans[0].rpm}"
+            return "n/a"
+        except Exception:
+            return "?"
     return "?"
+
+
+def _label_for_source(source: str) -> str:
+    return {
+        "cpu_temp": "CPU TEMP",
+        "gpu_temp": "GPU TEMP",
+        "cpu_pct": "CPU",
+        "gpu_pct": "GPU",
+        "mem_pct": "MEM",
+        "fan_rpm": "FAN",
+        "static": "",
+    }.get(source, source.upper())
 
 
 def run_oled(chip, state: ServiceState, stop: threading.Event) -> None:
@@ -141,22 +178,34 @@ def run_oled(chip, state: ServiceState, stop: threading.Event) -> None:
 
         try:
             if ocfg.scene == "hardware_monitor":
-                value = _read_value_source(ocfg.value_source)
-                oled.set_text(ocfg.label, value)
+                if ocfg.hw_mode == "rotate" and ocfg.rotate_sources:
+                    idx = int(time.time() / max(ocfg.rotate_interval_s, 0.5)) % len(ocfg.rotate_sources)
+                    src = ocfg.rotate_sources[idx]
+                    value = _read_value_source(src)
+                    label = _label_for_source(src)
+                else:
+                    src = ocfg.value_source
+                    value = _read_value_source(src)
+                    label = ocfg.label
+                oled.set_text(label, value)
+                state.set_frame("oled", ("text", label, value))
             elif ocfg.scene == "text":
                 # Single-line free text. Use ocfg.value (or fallback) as
                 # the displayed string. Label intentionally empty so the
                 # OLED isn't littered with leftover hardware_monitor labels.
                 text = ocfg.value if ocfg.value else "POLYLUX"
                 oled.set_text("", text)
+                state.set_frame("oled", ("text", "", text))
             elif ocfg.scene == "preset_gif" and not one_shot_done:
                 chip.hid_write(bytes([0xEC, 0x51, 0x10]) + b"\x00" * 62)
+                state.set_frame("oled", ("preset_gif", ocfg.preset_index))
                 one_shot_done = True
             elif ocfg.scene == "off" and not one_shot_done:
                 # Actually clear the OLED: empty text + return to data-input.
                 # Without this, the previous content stays on the display.
                 oled.set_text("", "")
                 chip.hid_write(bytes([0xEC, 0x51, 0x15]) + b"\x00" * 62)
+                state.set_frame("oled", ("off",))
                 one_shot_done = True
             state.mark_update("oled")
         except Exception as ex:
@@ -199,8 +248,12 @@ def run_aura_rgb(state: ServiceState, stop: threading.Event) -> None:
                 if acfg.scene != last_scene or acfg.color != last_color:
                     if acfg.scene == "solid":
                         rgb.set_all(acfg.color)
+                        controlled_n = len(rgb.controlled_devices)
+                        state.set_frame("aura_rgb", [acfg.color] * max(controlled_n, 1))
                     elif acfg.scene == "off":
                         rgb.turn_off()
+                        controlled_n = len(rgb.controlled_devices)
+                        state.set_frame("aura_rgb", [(0, 0, 0)] * max(controlled_n, 1))
                     last_scene = acfg.scene
                     last_color = acfg.color
                 state.mark_update("aura_rgb")
