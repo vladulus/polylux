@@ -204,7 +204,10 @@ def _read_value_source(source: str) -> str:
     if source == "cpu_pct":
         try:
             import psutil
-            return f"{psutil.cpu_percent(interval=None):.0f}%"
+            # interval=0.1 forces a real sample window. interval=None
+            # returns 0.0 until the per-thread internal counter is primed,
+            # which made the OLED show CPU 0% on idle reads.
+            return f"{psutil.cpu_percent(interval=0.1):.0f}%"
         except Exception:
             return "?"
     if source == "mem_pct":
