@@ -1,29 +1,33 @@
-"""LibreHardwareMonitor (LHM) WMI bridge.
+"""LibreHardwareMonitor (LHM) sensor bridge — HTTP/JSON variant.
 
-Reads fan RPMs and temperatures from the LHM Windows service via its
-WMI namespace ``root\\LibreHardwareMonitor``. If LHM isn't running, the
-class still constructs but ``health()`` reports the problem and the
-data accessors return empty defaults — never raises from the data
-methods.
+LHM 0.9.5+ removed the WMI provider in favor of a built-in Remote Web
+Server that serves the whole sensor tree as JSON at::
 
-LHM project: https://github.com/LibreHardwareMonitor/LibreHardwareMonitor
+    http://127.0.0.1:8085/data.json
+
+This module fetches that JSON, walks the tree, and exposes the fans +
+temperatures Polylux needs. If LHM isn't running, the web server isn't
+enabled, or the port is firewalled, ``health()`` reports the problem
+and the data accessors return empty defaults — never raises.
+
+Enable in LHM: Options → Remote Web Server → Run (default port 8085).
 """
 from __future__ import annotations
 
+import json
 import logging
+import re
+import urllib.request
 from dataclasses import dataclass
 from typing import Any, Optional
 
 
 log = logging.getLogger(__name__)
 
-try:
-    import wmi  # type: ignore[import-untyped]
-except ImportError:  # pragma: no cover
-    wmi = None
 
-
-LHM_NAMESPACE = "root\\LibreHardwareMonitor"
+DEFAULT_URL = "http://127.0.0.1:8085/data.json"
+_FAN_PATH = "/fan/"
+_TEMP_PATH = "/temperature/"
 
 
 @dataclass
@@ -32,92 +36,130 @@ class Fan:
     rpm: int
 
 
-class _FakeSensorList:
-    """Tiny stand-in that quacks like the WMI client for tests + offline UI dev."""
-
-    def __init__(self, sensors: list[Any]) -> None:
-        self._sensors = sensors
-
-    def Sensor(self) -> list[Any]:  # noqa: N802 (mimicking WMI casing)
-        return list(self._sensors)
-
-
-def _mk_fake_sensor(name: str, value: float, sensor_type: str):
-    class _S:
-        Name = name
-        Value = value
-        SensorType = sensor_type
-        Identifier = f"/{sensor_type.lower()}/{name}"
-    return _S()
-
-
-# Hand-rolled fake sensor data so UI work can proceed without LHM installed.
-FAKE_SENSORS_FOR_TEST = _FakeSensorList([
-    _mk_fake_sensor("CPU Package", 23.0, "Temperature"),
-    _mk_fake_sensor("GPU Hot Spot", 53.0, "Temperature"),
-    _mk_fake_sensor("Motherboard", 31.0, "Temperature"),
-    _mk_fake_sensor("CPU Fan", 1240.0, "Fan"),
-    _mk_fake_sensor("Chassis #1", 880.0, "Fan"),
-    _mk_fake_sensor("Chassis #2", 920.0, "Fan"),
-])
+# Hand-rolled fake JSON tree so UI dev / tests can proceed without LHM running.
+FAKE_TREE_FOR_TEST = {
+    "id": 0,
+    "Text": "Sensor",
+    "Children": [
+        {
+            "id": 1,
+            "Text": "TEST-PC",
+            "Children": [
+                {
+                    "id": 2,
+                    "Text": "ASUS ROG MAXIMUS Z690 EXTREME",
+                    "Children": [
+                        {
+                            "id": 3,
+                            "Text": "Temperatures",
+                            "Children": [
+                                {"id": 4, "Text": "CPU Package", "Value": "23.0 °C",
+                                 "Min": "21.0 °C", "Max": "45.0 °C",
+                                 "SensorId": "/intelcpu/0/temperature/0"},
+                                {"id": 5, "Text": "GPU Hot Spot", "Value": "53.0 °C",
+                                 "SensorId": "/nvidiagpu/0/temperature/1"},
+                                {"id": 6, "Text": "Motherboard", "Value": "31.0 °C",
+                                 "SensorId": "/lpc/nct6798d/temperature/0"},
+                            ],
+                        },
+                        {
+                            "id": 7,
+                            "Text": "Fans",
+                            "Children": [
+                                {"id": 8, "Text": "CPU Fan", "Value": "1240 RPM",
+                                 "SensorId": "/lpc/nct6798d/fan/1"},
+                                {"id": 9, "Text": "Chassis #1", "Value": "880 RPM",
+                                 "SensorId": "/lpc/nct6798d/fan/2"},
+                                {"id": 10, "Text": "Chassis #2", "Value": "920 RPM",
+                                 "SensorId": "/lpc/nct6798d/fan/3"},
+                            ],
+                        },
+                    ],
+                },
+            ],
+        },
+    ],
+}
 
 
 class LHMSensors:
-    """Thin WMI wrapper around LHM's sensor namespace.
+    """HTTP/JSON wrapper around LHM's Remote Web Server.
 
-    Pass ``_wmi_namespace`` to inject a fake client in tests; in production
-    the constructor builds a real ``wmi.WMI(namespace=LHM_NAMESPACE)``.
+    Pass ``_injected_tree`` to feed a static JSON tree in tests; in
+    production the constructor stores the URL and fetches on each call.
+    All public methods are safe to call without LHM running — they
+    return empty defaults and surface the problem via ``health()``.
     """
 
-    def __init__(self, _wmi_namespace: Optional[Any] = None) -> None:
+    def __init__(
+        self,
+        url: str = DEFAULT_URL,
+        _injected_tree: Optional[dict] = None,
+        timeout: float = 1.0,
+    ) -> None:
+        self._url = url
+        self._injected = _injected_tree
+        self._timeout = timeout
         self._last_error: Optional[str] = None
-        if _wmi_namespace is not None:
-            self._w = _wmi_namespace
-            return
-        if wmi is None:
-            self._w = None
-            self._last_error = "wmi package not installed"
-            return
+
+    def _fetch(self) -> Optional[dict]:
+        if self._injected is not None:
+            return self._injected
         try:
-            self._w = wmi.WMI(namespace=LHM_NAMESPACE)
+            with urllib.request.urlopen(self._url, timeout=self._timeout) as resp:
+                data = resp.read().decode("utf-8")
+            return json.loads(data)
         except Exception as ex:
-            self._w = None
             self._last_error = str(ex)
-            log.info("LHM not available: %s", ex)
+            return None
 
     def health(self) -> tuple[bool, Optional[str]]:
-        if self._w is None:
-            return (False, self._last_error)
-        try:
-            _ = self._w.Sensor()
-            return (True, None)
-        except Exception as ex:
-            self._last_error = str(ex)
-            return (False, str(ex))
+        data = self._fetch()
+        if data is None:
+            return (False, self._last_error or "LHM web server not reachable")
+        return (True, None)
 
-    def _sensors_by_type(self, sensor_type: str) -> list[Any]:
-        if self._w is None:
-            return []
-        try:
-            return [s for s in self._w.Sensor() if getattr(s, "SensorType", "") == sensor_type]
-        except Exception as ex:
-            self._last_error = str(ex)
-            log.debug("LHM Sensor() failed: %s", ex)
-            return []
+    def _walk(self, node: Any, out_fans: list, out_temps: dict) -> None:
+        if not isinstance(node, dict):
+            return
+        sid = node.get("SensorId") or ""
+        val = node.get("Value") or ""
+        name = node.get("Text") or ""
+        if isinstance(sid, str) and isinstance(val, str):
+            if _FAN_PATH in sid:
+                m = re.match(r"\s*(\d+)", val)
+                if m:
+                    out_fans.append(Fan(name=name, rpm=int(m.group(1))))
+            elif _TEMP_PATH in sid:
+                m = re.match(r"\s*([\-\d.]+)", val)
+                if m:
+                    try:
+                        out_temps[name.lower()] = float(m.group(1))
+                    except ValueError:
+                        pass
+        for child in node.get("Children", []) or []:
+            self._walk(child, out_fans, out_temps)
 
     def fans(self) -> list[Fan]:
-        return [
-            Fan(name=str(s.Name), rpm=int(round(float(s.Value or 0))))
-            for s in self._sensors_by_type("Fan")
-        ]
+        data = self._fetch()
+        if data is None:
+            return []
+        fans: list[Fan] = []
+        self._walk(data, fans, {})
+        return fans
 
     def temps(self) -> dict[str, float]:
-        return {
-            str(s.Name).lower(): float(s.Value)
-            for s in self._sensors_by_type("Temperature")
-            if s.Value is not None
-        }
+        data = self._fetch()
+        if data is None:
+            return {}
+        temps: dict[str, float] = {}
+        self._walk(data, [], temps)
+        return temps
 
     @property
     def last_error(self) -> Optional[str]:
         return self._last_error
+
+
+# Backwards-compat alias for tests that imported the WMI-era fixture name.
+FAKE_SENSORS_FOR_TEST = FAKE_TREE_FOR_TEST

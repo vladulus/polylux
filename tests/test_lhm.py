@@ -1,83 +1,94 @@
-"""LHM bridge tests — no actual LHM service required (uses fake WMI sensor list)."""
-from unittest.mock import MagicMock, patch
+"""LHM bridge tests — HTTP/JSON variant (LHM 0.9.5+ Remote Web Server).
 
+No actual LHM service required: tests inject a static JSON tree via
+``_injected_tree`` so they can run on CI / offline.
+"""
 import pytest
 
-from polylux.sensors.lhm import Fan, LHMSensors, FAKE_SENSORS_FOR_TEST
+from polylux.sensors.lhm import LHMSensors, FAKE_TREE_FOR_TEST
 
 
-def _fake_sensor(name: str, value: float, sensor_type: str, identifier: str = ""):
-    s = MagicMock()
-    s.Name = name
-    s.Value = value
-    s.SensorType = sensor_type
-    s.Identifier = identifier or f"/{sensor_type.lower()}/{name}"
-    return s
+def _tree_with(children):
+    return {
+        "Text": "Sensor",
+        "Children": [
+            {
+                "Text": "Mobo",
+                "Children": children,
+            },
+        ],
+    }
 
 
-def test_health_ok_when_wmi_responds():
-    fake_wmi = MagicMock()
-    fake_wmi.Sensor.return_value = [_fake_sensor("CPU Package", 23.0, "Temperature")]
-    s = LHMSensors(_wmi_namespace=fake_wmi)
+def test_health_ok_when_tree_present():
+    s = LHMSensors(_injected_tree=FAKE_TREE_FOR_TEST)
     ok, err = s.health()
     assert ok is True and err is None
 
 
-def test_health_fails_when_wmi_raises():
-    fake_wmi = MagicMock()
-    fake_wmi.Sensor.side_effect = Exception("namespace not found")
-    s = LHMSensors(_wmi_namespace=fake_wmi)
+def test_health_fails_when_url_unreachable():
+    s = LHMSensors(url="http://127.0.0.1:1/nope", timeout=0.1)
     ok, err = s.health()
     assert ok is False
-    assert "namespace not found" in (err or "")
+    assert err  # some error message
 
 
 def test_fans_returns_only_fan_sensors():
-    fake_wmi = MagicMock()
-    fake_wmi.Sensor.return_value = [
-        _fake_sensor("CPU Fan", 1240.0, "Fan"),
-        _fake_sensor("Chassis #1", 880.0, "Fan"),
-        _fake_sensor("CPU Package", 23.0, "Temperature"),
-        _fake_sensor("GPU Hot Spot", 53.0, "Temperature"),
-    ]
-    s = LHMSensors(_wmi_namespace=fake_wmi)
+    s = LHMSensors(_injected_tree=FAKE_TREE_FOR_TEST)
     fans = s.fans()
-    assert len(fans) == 2
-    assert fans[0].name == "CPU Fan" and fans[0].rpm == 1240
-    assert fans[1].name == "Chassis #1" and fans[1].rpm == 880
+    names = [f.name for f in fans]
+    assert "CPU Fan" in names
+    assert "Chassis #1" in names
+    assert "Chassis #2" in names
+    cpu = next(f for f in fans if f.name == "CPU Fan")
+    assert cpu.rpm == 1240
 
 
 def test_temps_returns_dict_keyed_by_lowered_name():
-    fake_wmi = MagicMock()
-    fake_wmi.Sensor.return_value = [
-        _fake_sensor("CPU Package", 23.5, "Temperature"),
-        _fake_sensor("GPU Hot Spot", 53.0, "Temperature"),
-        _fake_sensor("Motherboard", 31.0, "Temperature"),
-    ]
-    s = LHMSensors(_wmi_namespace=fake_wmi)
+    s = LHMSensors(_injected_tree=FAKE_TREE_FOR_TEST)
     temps = s.temps()
-    assert temps == {
-        "cpu package": 23.5,
-        "gpu hot spot": 53.0,
-        "motherboard": 31.0,
-    }
+    assert temps["cpu package"] == 23.0
+    assert temps["gpu hot spot"] == 53.0
+    assert temps["motherboard"] == 31.0
 
 
-def test_init_with_unreachable_service_does_not_raise():
-    """Constructing LHMSensors must NEVER raise — health() reports the problem."""
-    with patch("polylux.sensors.lhm.wmi") as fake_wmi_mod:
-        fake_wmi_mod.WMI.side_effect = Exception("rpc unavailable")
-        s = LHMSensors()
-        ok, err = s.health()
-        assert ok is False
-        assert "rpc unavailable" in (err or "")
-        # Sane fallbacks:
-        assert s.fans() == []
-        assert s.temps() == {}
+def test_walks_arbitrary_depth():
+    """SensorId paths under deeply nested trees should still surface."""
+    tree = _tree_with([
+        {"Text": "Group", "Children": [
+            {"Text": "Sub", "Children": [
+                {"Text": "Fan X", "Value": "1500 RPM",
+                 "SensorId": "/x/y/z/fan/9"},
+                {"Text": "Temp X", "Value": "42.5 °C",
+                 "SensorId": "/x/y/z/temperature/5"},
+            ]},
+        ]},
+    ])
+    s = LHMSensors(_injected_tree=tree)
+    fans = s.fans()
+    temps = s.temps()
+    assert any(f.name == "Fan X" and f.rpm == 1500 for f in fans)
+    assert temps["temp x"] == 42.5
 
 
-def test_fake_sensors_smoke():
-    """FAKE_SENSORS_FOR_TEST is a hand-rolled fixture for offline UI development."""
-    s = LHMSensors(_wmi_namespace=FAKE_SENSORS_FOR_TEST)
-    assert len(s.fans()) >= 1
-    assert "cpu package" in s.temps()
+def test_ignores_zero_rpm_fans_kept_at_zero():
+    """Stopped fans (0 RPM) are still reported — useful for ECO mode."""
+    tree = _tree_with([
+        {"Text": "Fans", "Children": [
+            {"Text": "Idle Fan", "Value": "0 RPM", "SensorId": "/lpc/x/fan/0"},
+        ]},
+    ])
+    s = LHMSensors(_injected_tree=tree)
+    fans = s.fans()
+    assert len(fans) == 1
+    assert fans[0].rpm == 0
+
+
+def test_handles_negative_temperatures():
+    tree = _tree_with([
+        {"Text": "Temps", "Children": [
+            {"Text": "Outside", "Value": "-5.0 °C", "SensorId": "/x/temperature/0"},
+        ]},
+    ])
+    s = LHMSensors(_injected_tree=tree)
+    assert s.temps()["outside"] == -5.0
