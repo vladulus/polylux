@@ -98,9 +98,17 @@ class OledPage(DevicePage):
             )
             v.addWidget(spd)
         elif scene == "preset_gif":
-            lbl = QLabel(f"(preset thumbnails — v0.5, currently index={cfg.preset_index})")
-            lbl.setObjectName("dim")
-            v.addWidget(lbl)
+            head = QLabel("FACTORY ANIMATIONS")
+            v.addWidget(head)
+            body = QLabel(
+                "The chip ships ~6 factory animations (EXTREME / shark / "
+                "swimmer / etc) and cycles through them on its own once "
+                "the scene is active. Per-preset selection needs protocol "
+                "capture work (planned for v0.5)."
+            )
+            body.setObjectName("dim")
+            body.setWordWrap(True)
+            v.addWidget(body)
         else:
             lbl = QLabel("(no extra config)")
             lbl.setObjectName("dim")
