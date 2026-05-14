@@ -216,10 +216,20 @@ def _read_value_source(source: str) -> str:
     if source == "cpu_temp":
         try:
             import psutil
-            temps = psutil.sensors_temperatures() if hasattr(psutil, "sensors_temperatures") else {}
-            for key in ("coretemp", "k10temp", "cpu_thermal"):
-                if key in temps and temps[key]:
-                    return f"{temps[key][0].current:.0f} °C"
+            if hasattr(psutil, "sensors_temperatures"):
+                temps = psutil.sensors_temperatures()
+                for key in ("coretemp", "k10temp", "cpu_thermal"):
+                    if key in temps and temps[key]:
+                        return f"{temps[key][0].current:.0f} °C"
+        except Exception:
+            pass
+        # Windows fallback: LHM HTTP endpoint
+        try:
+            from polylux.sensors.lhm import LHMSensors
+            temps = LHMSensors().temps()
+            for k in ("cpu package", "cpu core", "cpu (tctl/tdie)", "core (tctl/tdie)"):
+                if k in temps:
+                    return f"{temps[k]:.0f} °C"
             return "n/a"
         except Exception:
             return "?"
