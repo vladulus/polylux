@@ -147,3 +147,58 @@ class AuraRGB:
     def turn_off(self) -> None:
         """Set every controlled device to black (effectively off)."""
         self.set_all((0, 0, 0))
+
+    def available_modes(self) -> list[str]:
+        """OpenRGB modes supported by every controlled device.
+
+        Returns the intersection — if Vlad has a MB (9 modes) and a keyboard
+        (7 modes), the intersection (~5 modes) is what UI exposes so picking
+        one always works for all controlled devices. Ordered to match the
+        primary device's mode order so 'Direct' / 'Static' / 'Off' come
+        first as they do natively.
+        """
+        if self._client is None:
+            return []
+        devs = self.controlled_devices
+        if not devs:
+            return []
+        primary = [m.name for m in devs[0].modes]
+        if len(devs) == 1:
+            return primary
+        common = set(primary)
+        for d in devs[1:]:
+            common &= {m.name for m in d.modes}
+        return [m for m in primary if m in common]
+
+    def set_mode(self, mode_name: str, color: Optional[RGB] = None) -> None:
+        """Switch every controlled device to ``mode_name`` and, if the mode
+        accepts a per-mode colour, apply ``color`` afterwards.
+
+        Modes like 'Spectrum Cycle' / 'Rainbow' ignore the colour (cycle
+        through the wheel themselves); 'Static' / 'Direct' / 'Breathing'
+        / 'Flashing' all use it. We always try ``set_color`` — devices
+        that don't care no-op.
+        """
+        if self._client is None:
+            raise AuraRGBError("not connected")
+        from openrgb.utils import RGBColor
+        target_name = mode_name.lower()
+        rc = RGBColor(*color) if color is not None else None
+        for dev in self.controlled_devices:
+            try:
+                # set_mode accepts a name or an index — most openrgb-python
+                # builds resolve name in modes[]. Fall back to indexed lookup.
+                try:
+                    dev.set_mode(mode_name)
+                except Exception:
+                    for i, m in enumerate(dev.modes):
+                        if m.name.lower() == target_name:
+                            dev.set_mode(i)
+                            break
+                if rc is not None:
+                    try:
+                        dev.set_color(rc)
+                    except Exception:
+                        pass
+            except Exception:
+                continue

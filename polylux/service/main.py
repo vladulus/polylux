@@ -403,17 +403,36 @@ def run_aura_rgb(state: ServiceState, stop: threading.Event) -> None:
                     continue
 
             try:
-                if acfg.scene != last_scene or acfg.color != last_color:
-                    if acfg.scene == "solid":
-                        rgb.set_all(acfg.color)
-                        controlled_n = len(rgb.controlled_devices)
-                        state.set_frame("aura_rgb", [acfg.color] * max(controlled_n, 1))
-                    elif acfg.scene == "off":
-                        rgb.turn_off()
-                        controlled_n = len(rgb.controlled_devices)
-                        state.set_frame("aura_rgb", [(0, 0, 0)] * max(controlled_n, 1))
+                last_brightness_aura = getattr(run_aura_rgb, "_last_brightness", None)
+                if (acfg.scene != last_scene or acfg.color != last_color
+                        or acfg.brightness != last_brightness_aura):
+                    b = max(0, min(100, acfg.brightness)) / 100.0
+                    scaled = (
+                        int(acfg.color[0] * b),
+                        int(acfg.color[1] * b),
+                        int(acfg.color[2] * b),
+                    )
+                    # OpenRGB mode = acfg.scene (legacy "solid" mapped at load).
+                    rgb.set_mode(acfg.scene, color=scaled)
+                    controlled_n = len(rgb.controlled_devices)
+                    # The live preview shows the requested colour for colour-
+                    # using modes, black for Off, and a per-mode placeholder
+                    # otherwise. Cycle-modes (Rainbow / Spectrum) we just
+                    # show as a rainbow strip.
+                    if acfg.scene.lower() == "off":
+                        preview = [(0, 0, 0)] * max(controlled_n, 1)
+                    elif "rainbow" in acfg.scene.lower() or "spectrum" in acfg.scene.lower():
+                        import colorsys
+                        preview = [
+                            tuple(int(c * 255) for c in colorsys.hsv_to_rgb(i / 12, 1.0, b))
+                            for i in range(12)
+                        ]
+                    else:
+                        preview = [scaled] * max(controlled_n, 1)
+                    state.set_frame("aura_rgb", preview)
                     last_scene = acfg.scene
                     last_color = acfg.color
+                    run_aura_rgb._last_brightness = acfg.brightness  # type: ignore[attr-defined]
                 state.mark_update("aura_rgb")
             except Exception as ex:
                 state.mark_update("aura_rgb", error=str(ex))

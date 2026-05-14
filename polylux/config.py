@@ -152,7 +152,7 @@ class RyujinLcdConfig:
 @dataclass
 class AuraRGBConfig:
     enabled: bool = False
-    scene: str = "off"
+    scene: str = "Off"                # also serves as the OpenRGB mode name
     color: RGB = (0, 0, 0)
     host: str = "127.0.0.1"
     port: int = 6742
@@ -161,7 +161,16 @@ class AuraRGBConfig:
     types: tuple[str, ...] = ("MOTHERBOARD",)
     brightness: int = 100             # 0-100, multiplied into RGB before send
 
-    SCENES = ("solid", "off")
+    # Whatever the OpenRGB SDK exposes via available_modes() — these are
+    # the common ones we hardcode for v0.4 so the UI has a stable list
+    # even before the driver is connected. Per-device intersection is
+    # the real source of truth at runtime.
+    SCENES = (
+        "Direct", "Static", "Breathing", "Flashing",
+        "Spectrum Cycle", "Rainbow", "Chase Fade", "Chase", "Off",
+        # v0.3 legacy alias kept so existing YAML loads:
+        "solid",
+    )
 
     def validate(self) -> None:
         if self.scene not in self.SCENES:
@@ -247,7 +256,10 @@ def load(path: str | Path = DEFAULT_CONFIG_PATH) -> PolyluxConfig:
 
     a = raw.get("aura_rgb") or {}
     cfg.aura_rgb.enabled = bool(a.get("enabled", False))
-    cfg.aura_rgb.scene = str(a.get("scene", cfg.aura_rgb.scene))
+    scene_raw = str(a.get("scene", cfg.aura_rgb.scene))
+    # Map v0.3 lowercase aliases to OpenRGB mode names.
+    _legacy = {"solid": "Static", "off": "Off"}
+    cfg.aura_rgb.scene = _legacy.get(scene_raw, scene_raw)
     if "color" in a:
         cfg.aura_rgb.color = _coerce_color(a["color"])
     cfg.aura_rgb.host = str(a.get("host", cfg.aura_rgb.host))

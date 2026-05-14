@@ -19,7 +19,7 @@ from typing import Optional
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import (
-    QCheckBox, QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
+    QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
 )
 
 from polylux.ui.state import ServiceState
@@ -79,14 +79,29 @@ class DevicePage(QWidget):
         sc_label.setObjectName("card_label")
         outer.addWidget(sc_label)
         outer.addSpacing(8)
-        self._scene_row = QHBoxLayout()
-        self._scene_row.setSpacing(10)
-        outer.addLayout(self._scene_row)
-        for key, title, preview in self._scenes():
-            card = SceneCard(scene_key=key, title=title, preview=preview)
-            card.clicked_scene.connect(self.set_scene)
-            self._scene_row.addWidget(card)
-            self._scene_cards[key] = card
+        scenes_list = list(self._scenes())
+        # 4+ scenes wrap into a grid (max 4 cols per row) so a long
+        # mode list (Aura RGB has 9 OpenRGB modes) doesn't squash every
+        # card into a sliver.
+        if len(scenes_list) > 4:
+            self._scene_row = QGridLayout()
+            self._scene_row.setSpacing(10)
+            outer.addLayout(self._scene_row)
+            cols = 4
+            for i, (key, title, preview) in enumerate(scenes_list):
+                card = SceneCard(scene_key=key, title=title, preview=preview)
+                card.clicked_scene.connect(self.set_scene)
+                self._scene_row.addWidget(card, i // cols, i % cols)
+                self._scene_cards[key] = card
+        else:
+            self._scene_row = QHBoxLayout()
+            self._scene_row.setSpacing(10)
+            outer.addLayout(self._scene_row)
+            for key, title, preview in scenes_list:
+                card = SceneCard(scene_key=key, title=title, preview=preview)
+                card.clicked_scene.connect(self.set_scene)
+                self._scene_row.addWidget(card)
+                self._scene_cards[key] = card
 
         outer.addSpacing(20)
 

@@ -1,4 +1,13 @@
-"""Aura RGB page — scenes: solid / off."""
+"""Aura RGB page — every OpenRGB mode exposed as a scene card.
+
+The motherboard controller advertises 9 modes (Direct, Off, Static,
+Breathing, Flashing, Spectrum Cycle, Rainbow, Chase Fade, Chase). They
+run firmware-side so Polylux just sets the mode + a base color via
+OpenRGB SDK; no per-frame Python animation loop.
+
+Color picker is shown for every mode — modes that don't use color
+(Spectrum Cycle / Rainbow) silently ignore it on the device.
+"""
 from __future__ import annotations
 
 from PyQt6.QtWidgets import QCheckBox, QLabel, QVBoxLayout, QWidget
@@ -11,6 +20,14 @@ from polylux.ui.widgets.slider_row import SliderRow
 
 KNOWN_TYPES = ("MOTHERBOARD", "KEYBOARD", "MOUSE", "DRAM", "GPU", "HEADSET")
 
+# Hardcoded common-MB list for v0.4 — matches what `available_modes()`
+# returns on the Z690 Extreme. v0.5 will query the driver at runtime so
+# users with different controllers see exactly their device's modes.
+AURA_MODES = [
+    "Direct", "Static", "Breathing", "Flashing",
+    "Spectrum Cycle", "Rainbow", "Chase Fade", "Chase", "Off",
+]
+
 
 class AuraRGBPage(DevicePage):
     DEVICE_KEY = "aura_rgb"
@@ -18,10 +35,7 @@ class AuraRGBPage(DevicePage):
     DEVICE_SUBTITLE = "OpenRGB · MB-only by default"
 
     def _scenes(self):
-        return [
-            ("solid", "SOLID", None),
-            ("off",   "OFF",   None),
-        ]
+        return [(m, m.upper(), None) for m in AURA_MODES]
 
     def build_scene_config(self, scene: str) -> QWidget:
         cfg = self._state.snapshot().aura_rgb
@@ -29,17 +43,28 @@ class AuraRGBPage(DevicePage):
         v = QVBoxLayout(w)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(14)
-        if scene == "solid":
+
+        if scene.lower() == "off":
+            lbl = QLabel("LEDs turned off via firmware-native 'Off' mode.")
+            lbl.setObjectName("dim")
+            v.addWidget(lbl)
+        else:
             pick = ColorPicker(color=cfg.color)
             pick.color_changed.connect(
                 lambda c: self._state.update_device("aura_rgb", {"color": c})
             )
             v.addWidget(QLabel("COLOR"))
             v.addWidget(pick)
-        else:
-            lbl = QLabel("(no extra config)")
-            lbl.setObjectName("dim")
-            v.addWidget(lbl)
+
+            if scene.lower() in ("spectrum cycle", "rainbow"):
+                note = QLabel(
+                    "This mode cycles through the full hue wheel — the "
+                    "color picker is ignored by the firmware."
+                )
+                note.setObjectName("dim")
+                note.setWordWrap(True)
+                v.addWidget(note)
+
         v.addStretch(1)
         return w
 
@@ -75,7 +100,6 @@ class AuraRGBPage(DevicePage):
 
     def _sync_types(self) -> None:
         types = tuple(t for t, cb in self._type_checks if cb.isChecked())
-        # Always keep at least MOTHERBOARD to avoid full disable surprise
         if not types:
             types = ("MOTHERBOARD",)
         self._state.update_device("aura_rgb", {"types": types})
