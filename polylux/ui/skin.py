@@ -261,6 +261,57 @@ class Skin:
             font-family: "{self.font_family('header')}";
             font-size: 13px;
         }}
+
+        QSlider::groove:horizontal {{
+            background: {c.get('bg_alt', '#0a0a0a')};
+            border: 1px solid {c.get('card_border', '#242424')};
+            border-radius: 3px;
+            height: 6px;
+        }}
+        QSlider::sub-page:horizontal {{
+            background: {c.get('accent', '#C15F3C')};
+            border: 1px solid {c.get('accent', '#C15F3C')};
+            border-radius: 3px;
+            height: 6px;
+        }}
+        QSlider::add-page:horizontal {{
+            background: {c.get('bg_alt', '#0a0a0a')};
+            border: 1px solid {c.get('card_border', '#242424')};
+            border-radius: 3px;
+            height: 6px;
+        }}
+        QSlider::handle:horizontal {{
+            background: {c.get('accent', '#C15F3C')};
+            border: 2px solid {c.get('surface', '#161616')};
+            width: 14px;
+            margin-top: -6px;
+            margin-bottom: -6px;
+            border-radius: 9px;
+        }}
+        QSlider::handle:horizontal:hover {{
+            background: {c.get('text', '#fff')};
+        }}
+
+        QCheckBox {{
+            color: {c.get('text', '#e6e6e6')};
+            spacing: 8px;
+            padding: 4px 0;
+        }}
+        QCheckBox::indicator {{
+            width: 16px;
+            height: 16px;
+            border: 1px solid {c.get('card_border', '#242424')};
+            border-radius: 3px;
+            background: {c.get('bg_alt', '#0a0a0a')};
+        }}
+        QCheckBox::indicator:checked {{
+            background: {c.get('accent', '#C15F3C')};
+            border-color: {c.get('accent', '#C15F3C')};
+            image: none;
+        }}
+        QCheckBox::indicator:hover {{
+            border-color: {c.get('accent', '#C15F3C')};
+        }}
         """
 
         # Append per-skin overrides if present.
