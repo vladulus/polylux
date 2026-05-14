@@ -26,6 +26,7 @@ from typing import Optional
 from polylux import config as cfg_mod
 from polylux.config import PolyluxConfig
 from polylux.service.kill_asus_stack import kill_asus_stack
+from polylux.service import external
 from polylux.ui.state import ServiceState, build_state
 
 log = logging.getLogger("polylux")
@@ -456,6 +457,13 @@ def main() -> int:
         log.info("killing ASUS stack (Aac3572MbHal + services)...")
         kill_asus_stack()
 
+    # Bring up bundled external services so the user gets a one-process feel.
+    # LHM needs admin → scheduled task triggers it elevated, no UAC.
+    # OpenRGB runs in user mode → spawn directly.
+    external.ensure_lhm()
+    if cfg.aura_rgb.enabled:
+        external.launch_openrgb()
+
     chip = None
     need_chip = cfg.matrix.enabled or cfg.oled.enabled
     if need_chip:
@@ -516,6 +524,9 @@ def main() -> int:
         app._app.aboutToQuit.connect(_stop_event.set)
         rc = app.exec()
         log.info("Qt loop exited rc=%d", rc)
+
+    # Clean shutdown of any external processes we spawned.
+    external.stop_all()
 
     log.info("stopping driver threads...")
     _stop_event.set()
