@@ -1630,3 +1630,196 @@ Per Vlad's empirical testing 2026-05-12:
   - **BIOS image extraction**: FPT.exe / similar to extract chip
     firmware from BIOS, grep for ec-prefixed command patterns. That's
     the canonical source of truth for chip behavior.
+
+### 16 v0.4 SHIP — Tabbed UI + Live Hardware Integration (2026-05-13 → 14)
+
+The v0.4 milestone replaces the v0.3 Winamp-style single-page UI with an
+Armoury-Crate-style sidebar + tabbed shell, wires every device's config
+to live controls (no more YAML editing), and bundles
+LibreHardwareMonitor + OpenRGB so Polylux behaves like one product
+instead of three coordinated apps.
+
+Spec: `docs/superpowers/specs/2026-05-13-tabbed-ui-redesign-design.md`.
+Plan: `docs/superpowers/plans/2026-05-13-tabbed-ui-redesign.md`.
+
+### 16.1 What ships
+
+  - **PyQt6 sidebar shell** (`polylux/ui/main_window.py`, `sidebar.py`)
+    — frameless 1280×860 window, 180px left nav with six entries
+    (Dashboard / Anime Matrix / OLED / Aura RGB / Ryujin LCD /
+    Settings), `QStackedWidget` of eager-loaded pages so live previews
+    subscribe immediately even when the tab is hidden. ENABLED toggle
+    sits in each page's header bar.
+
+  - **Dashboard** (`polylux/ui/pages/dashboard.py`) — landing tab with
+    two `RadialGauge`s (CPU temp, GPU temp; 230° arc, threshold colors
+    cool/warm/hot), four cards (CPU FAN / CHASSIS 1 / CHASSIS 2 /
+    MEMORY) and a device-status row. 1 Hz refresh. CPU temp falls back
+    to LHM HTTP when psutil returns nothing (Windows).
+
+  - **Anime Matrix** (`polylux/ui/pages/matrix.py`):
+      - Scenes: `clock` / `text` / `image` / `off` (FILL removed; IMAGE
+        replaces it).
+      - Clock: independent `clock_color` + `clock_font_size` slider
+        (5 = native 3×5 pixel font, 6+ = Arial Bold via PIL).
+      - Text: live `textChanged` propagation, `text_font_size` slider
+        (7..16 px), per-scene color picker, AC-style uppercase + Arial
+        Bold, `draw_text_scrolled()` for marquee when text exceeds the
+        long axis. Scroll speed: `scroll_speed * 0.3 px/sec` via
+        fractional accumulator at 20 fps.
+      - Image: PNG/JPG/BMP/GIF; animated GIFs cycle ~6.6 fps;
+        `draw_image_scrolled()` and `image_scroll` flag for wide
+        images.
+      - Brightness applied at color-scale time (text/clock) and via
+        `PIL.ImageEnhance.Brightness` (image).
+      - Common card: brightness slider, rotation segment
+        (0/90/180/270).
+      - Live preview: real LED LUT (`lut.ALL_COORDS`,
+        `lut.rgb_bytes`) instead of the original flat 38×32 grid;
+        horizontal layout (rows on X, cols on Y) with 180° flip to
+        match the physical Z690 Extreme mount; dot cap 22 px.
+
+  - **OLED** (`polylux/ui/pages/oled.py`):
+      - Scenes: `hardware_monitor` / `text` / `preset_gif` / `off`.
+      - hardware_monitor: SINGLE / ROTATE mode toggle. SINGLE = 6-card
+        metric picker (cpu_temp / gpu_temp / cpu_pct / gpu_pct /
+        mem_pct / fan_rpm) + LABEL OVERRIDE. ROTATE = multi-checkbox
+        of the same metrics + interval slider (1..10s), driver cycles
+        by `int(time.time() / interval) % len(sources)`.
+      - Text: LABEL / VALUE inputs both `textChanged`; SCROLL SPEED
+        slider for values longer than 16 chars (shifts a 16-char
+        window through padded text at chars/sec = `scroll_speed / 10`).
+      - preset_gif: scene fires `ec 51 10` to enter preset mode; the
+        chip cycles internally (per-preset selection is v0.5 protocol
+        research).
+      - All label + value text is uppercased at the driver layer
+        (`.upper()`) — the OLED firmware renders caps only, so the
+        preview and panel now match.
+      - Brightness command speculative (`ec 51 14 <level>`); if the
+        chip ignores it, the slider is a UI knob with no visible
+        effect — flagged as v0.5 work, so the COMMON card on OLED was
+        reduced to just ENABLED + an explanation note.
+      - Live preview: **128×32 px** (not 256×64 — fixed after web
+        search), integer-scale-to-fit, label centered on top half +
+        value centered on bottom half, Bahnschrift Condensed (Windows
+        10+) / Agency FB fallback to approximate the proprietary ROG
+        font.
+
+  - **Aura RGB** (`polylux/ui/pages/aura_rgb.py`) — solid / off scenes
+    with `ColorPicker` (big swatch button shows `#RRGGBB` inline +
+    8 preset swatches; auto-picks fg color for swatch contrast).
+    Types multi-check with §9.4.1 warning about KEYBOARD / MOUSE
+    overriding per-key effects; default falls back to MOTHERBOARD-only.
+
+  - **Ryujin LCD** (`polylux/ui/pages/ryujin.py`) — minimal v0.4
+    surface (hardware_monitor / off, firmware-driven). Custom-image
+    upload (§9.3 protocol decoded, live behavior untested) deferred.
+
+  - **Settings** (`polylux/ui/pages/settings.py`) — skin selector
+    (instant style swap via QSS reload) + kill_asus_stack toggle.
+    Autostart / language / theme editor → v0.5.
+
+  - **Skin system kept** (`polylux/ui/skins/claude/skin.json` bumped
+    to v2.0 — 1280×860 frameless, new sidebar/card/scene-card colors).
+    All new QSS selectors fall back gracefully when fields absent.
+
+  - **Live preview architecture** — `ServiceState.set_frame(device,
+    frame)` + `add_frame_listener(device, fn)`. Scene runners emit the
+    last rendered bytes after every successful HW write; per-device
+    `LivePreview` widgets subscribe and repaint. Single source of
+    truth, no UI/HW drift.
+
+### 16.2 Bundled external services
+
+  - **LibreHardwareMonitor 0.9.6** (`tools/LibreHardwareMonitor/`,
+    gitignored) provides fan RPMs + MB / CPU temps. v0.9.5+ replaced
+    the WMI provider with a Remote Web Server (Options → Remote Web
+    Server → Run, port 8085) — `polylux/sensors/lhm.py` rewritten to
+    fetch `http://127.0.0.1:8085/data.json`, walk the tree recursively,
+    and extract `/fan/` + `/temperature/` leaves. Sensor access needs
+    admin; wrapped via a Windows scheduled task (`PolyluxLHM`, see
+    `tools/register_lhm_task.ps1`) — one-time UAC then auto-start at
+    logon, no further prompts.
+
+  - **OpenRGB** (`tools/OpenRGB/`) auto-launched by the Polylux service
+    as a `--server --noautoconnect` child process at startup; cleanly
+    terminated on shutdown. User-mode, no UAC.
+
+  - `polylux/service/external.py` glues both together: `ensure_lhm()`
+    triggers the scheduled task if LHM isn't running, `launch_openrgb()`
+    spawns OpenRGB if its process isn't visible.
+
+### 16.3 Known limitations (deferred to v0.5)
+
+  - **LHM tray icon visible** — LHM 0.9.5+ is a pure Windows Forms app
+    and can't run in session 0 as a Windows service (NSSM-wrap attempt
+    failed: the service starts but form-init blocks). v0.5 plan: a
+    custom headless C# wrapper around `LibreHardwareMonitorLib.dll`
+    that exposes the same HTTP API but with no UI / no tray
+    (~150 lines of C#).
+
+  - **OLED brightness opcode unverified** — `ec 51 14 <level>` is
+    speculative; need live test or USBPcap of AC's brightness slider
+    to confirm. UI hides brightness from OLED COMMON until verified.
+
+  - **OLED preset GIF index unselectable** — `ec 51 10` enters preset
+    mode but the chip cycles all 6 factory animations internally.
+    Per-preset selection needs USBPcap of AC switching between
+    presets.
+
+  - **OLED custom_image** — blocked by ASUS firmware bug §9.2 on Z690
+    Extreme (upload completes, display ignores). Not exposed.
+
+  - **Ryujin custom_image** — upload protocol §9.3 decoded but live
+    display behavior untested; may share the OLED firmware bug or not.
+
+  - **Resizable window** — current 1280×860 is fixed-size; resize is
+    non-trivial with QSS-driven sizing.
+
+### 16.4 Commit topology
+
+The full v0.4 work spans ~60 commits between the spec/plan landing
+(`a2b18e1`) and §16. Key landmarks (chronological):
+
+  - 834455e  [config] v0.4 schema (brightness, font_size, oled rotate)
+  - 25f6997  [sensors] LHM bridge (later rewritten for HTTP)
+  - 306e724  [state] per-device last-frame storage + listener API
+  - 01a00a6  [service] scene runners emit last-rendered frame
+  - 21edce7  [ui+widgets] full widget suite (gauge / scene_card / etc.)
+  - a904f59  [ui+skin] skin.json + QSS for sidebar / scene_card / cards
+  - 678e9c9  [ui] MainWindow shell + page stubs (window.py deleted)
+  - 28f7060  [ui+page] DevicePage base + Matrix minimal
+  - a8a78b6  [ui+page] Dashboard
+  - 2c66fd0  [ui+pages] Matrix / OLED / Aura RGB / Ryujin / Settings full
+  - 11ef6b1  [ui+preview] real LED LUT for matrix preview
+  - 76d9b1b/dff647f  [ui+preview] horizontal matrix + 180° flip
+  - d9ed865/d25c3bd  [matrix] PIL font + scrolling marquee
+  - 6984da9/b6a48b2  [matrix] Arial Bold uppercase (AC style)
+  - 16102aa  [matrix] clock_color + text_font_size + image GIF/scroll
+  - 3d586a2/20d5f75/213dab7  [ui+oled-preview] 128×32 + uppercase + ROG-ish font
+  - d1238db  [sensors] LHM rewritten for HTTP/JSON
+  - 2f98c2f  [service] external manager — OpenRGB spawn + LHM ensure
+  - f250cd0  [ui] ENABLED in header; OLED/Ryujin hide COMMON card
+  - eae9d43  [service] cpu_pct uses interval=0.1 — fix OLED 0%
+
+### 16.5 v0.4 SHIP-ready features summary
+
+  - Full Armoury-Crate-style tabbed UI replacing v0.3 Winamp
+    single-page.
+  - Matrix: AC-style scrolling marquee text (Arial Bold uppercase),
+    static image / animated GIF, configurable rotation + brightness +
+    font size, independent clock color + size, live LUT-correct
+    preview.
+  - OLED: hardware_monitor with SINGLE / ROTATE metric cycling, text
+    mode with horizontal scroll for long values, factory preset mode
+    (cycle), uppercase rendering matching panel firmware, 128×32
+    ROG-font-style preview.
+  - Aura RGB: solid color via OpenRGB with type-safe defaults
+    (MB only).
+  - Dashboard: live CPU/GPU temp gauges, fan RPMs (LHM), memory,
+    device status — all 1 Hz refresh.
+  - LHM + OpenRGB auto-managed by Polylux service (one-time UAC for
+    LHM, OpenRGB spawned cleanly per-launch).
+  - Skin system carried over from v0.3, all new QSS additive.
+  - 72 tests green (excluding the pre-existing
+    test_anime_matrix_usb_direct breakage from the chip 1A21 refactor).
