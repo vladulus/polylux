@@ -32,6 +32,7 @@ Scenes available:
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -42,7 +43,45 @@ except ImportError:  # pragma: no cover
     yaml = None
 
 
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "polylux.yaml"
+def _default_config_path() -> Path:
+    """Locate the canonical config file for the current install.
+
+    Resolution order:
+      1. ``%APPDATA%\\Polylux\\polylux.yaml`` — the per-user, always-
+         writeable location seeded by the installer on first install.
+         **Always preferred** so the UI can save changes without admin.
+         If the file is missing but the directory exists (or we can
+         create it), seed it from the bundled default before returning.
+      2. Bundled default at ``<package>/../polylux.yaml`` — works in
+         dev (repo root) and in the frozen install (``_internal/``).
+         Read-only fallback when %APPDATA% is unavailable (very rare).
+
+    Picks #1 even when the user passed no ``--config`` arg, so
+    double-clicking the installed exe still loads the user's actual
+    settings rather than the factory bundle.
+    """
+    bundled = Path(__file__).resolve().parent.parent / "polylux.yaml"
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return bundled
+    user_path = Path(appdata) / "Polylux" / "polylux.yaml"
+    if user_path.exists():
+        return user_path
+    # Try to seed it from the bundled default so subsequent saves work.
+    try:
+        user_path.parent.mkdir(parents=True, exist_ok=True)
+        if bundled.exists():
+            user_path.write_bytes(bundled.read_bytes())
+            return user_path
+    except OSError:
+        pass
+    return bundled
+
+
+# Backwards-compat: module-level constant resolved at import time.
+# Code that wants live discovery should call _default_config_path()
+# directly (it's cheap; one stat per call).
+DEFAULT_CONFIG_PATH = _default_config_path()
 
 
 RGB = tuple[int, int, int]

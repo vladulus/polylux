@@ -42,9 +42,17 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import sys
 from typing import Iterable
 
 log = logging.getLogger(__name__)
+
+
+# CREATE_NO_WINDOW — without it, every subprocess.run on Windows opens
+# a brief black console window when the parent has console=False
+# (frozen PyInstaller install). Polylux fires several of these in a row
+# at startup, which flashes the screen.
+_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 
 ASUS_PROCESSES = (
@@ -82,7 +90,7 @@ def kill_processes(names: Iterable[str] = ASUS_PROCESSES) -> dict[str, bool]:
     for name in names:
         proc = subprocess.run(
             ["taskkill", "/F", "/IM", f"{name}.exe"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, creationflags=_NO_WINDOW,
         )
         killed = proc.returncode == 0
         results[name] = killed
@@ -104,6 +112,7 @@ def _services_running(names: Iterable[str]) -> list[str]:
     proc = subprocess.run(
         ["powershell.exe", "-NoProfile", "-Command", script],
         capture_output=True, text=True,
+    creationflags=_NO_WINDOW,
     )
     if proc.returncode != 0:
         return []
@@ -128,6 +137,7 @@ def _services_not_already_disabled(names: Iterable[str]) -> list[str]:
     proc = subprocess.run(
         ["powershell.exe", "-NoProfile", "-Command", script],
         capture_output=True, text=True,
+    creationflags=_NO_WINDOW,
     )
     if proc.returncode != 0:
         return names  # be conservative on error
@@ -172,6 +182,7 @@ def stop_services(names: Iterable[str] = ASUS_SERVICES,
     proc = subprocess.run(
         ["powershell.exe", "-NoProfile", "-Command", direct_script],
         capture_output=True, text=True,
+    creationflags=_NO_WINDOW,
     )
     direct_ok = proc.returncode == 0 and "Cannot open" not in proc.stderr
     if direct_ok:
@@ -207,6 +218,7 @@ def stop_services(names: Iterable[str] = ASUS_SERVICES,
         elevation = subprocess.run(
             ["powershell.exe", "-NoProfile", "-Command", launcher],
             capture_output=True, text=True,
+        creationflags=_NO_WINDOW,
         )
         if elevation.returncode == 0:
             log.info("Elevated Stop-Service completed.")

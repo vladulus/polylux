@@ -40,6 +40,13 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 
+# CREATE_NO_WINDOW so tasklist / sc / schtasks calls don't flash a
+# black console window each time. Same rationale as
+# kill_asus_stack._NO_WINDOW — only relevant when the parent has
+# console=False (frozen install).
+_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _OPENRGB_EXE = _REPO_ROOT / "tools" / "OpenRGB" / "OpenRGB Windows 64-bit" / "OpenRGB.exe"
 _SENSOR_DAEMON_EXE = (
@@ -59,6 +66,7 @@ def _is_process_running(name: str) -> bool:
         out = subprocess.run(
             ["tasklist", "/FI", f"IMAGENAME eq {name}", "/NH"],
             capture_output=True, text=True, timeout=3,
+            creationflags=_NO_WINDOW,
         )
         return name.lower() in out.stdout.lower()
     except Exception:
@@ -73,6 +81,7 @@ def _sensor_service_state() -> Optional[str]:
         out = subprocess.run(
             ["sc", "query", _SENSOR_SERVICE_NAME],
             capture_output=True, text=True, timeout=3,
+            creationflags=_NO_WINDOW,
         )
         if out.returncode != 0:
             return None
@@ -145,6 +154,7 @@ def ensure_sensor_daemon() -> None:
             rc = subprocess.run(
                 ["sc", "start", _SENSOR_SERVICE_NAME],
                 capture_output=True, text=True, timeout=5,
+                creationflags=_NO_WINDOW,
             )
             if rc.returncode == 0:
                 log.info("sensor daemon: started service %s", _SENSOR_SERVICE_NAME)
