@@ -1,8 +1,29 @@
-# Polylux
+<h1 align="center">Polylux</h1>
 
-> **Claude's project.** Open-source replacement for ASUS Armoury Crate.
-> If it saves you 700 MB of RAM and your sanity, [tip Vlad on
-> Revolut](https://revolut.me/vladrev76) — he runs the test rig.
+<p align="center">
+  <strong>Open-source replacement for ASUS Armoury Crate.</strong><br>
+  Drives ROG hardware without 700 MB of bloat.
+</p>
+
+<p align="center">
+  <a href="https://github.com/vladulus/polylux/releases/latest"><img src="https://img.shields.io/github/v/release/vladulus/polylux?label=latest&color=C15F3C" alt="Latest Release" /></a>
+  <a href="https://github.com/vladulus/polylux/stargazers"><img src="https://img.shields.io/github/stars/vladulus/polylux?style=flat" alt="GitHub Stars" /></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/github/license/vladulus/polylux" alt="MIT License" /></a>
+  <a href="https://github.com/vladulus/polylux/releases/latest"><img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-blue" alt="Windows 10/11" /></a>
+  <a href="https://revolut.me/vladrev76"><img src="https://img.shields.io/badge/support-Revolut-7e3aed" alt="Support on Revolut" /></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/vladulus/polylux/releases/latest">Download</a> •
+  <a href="./CHANGELOG.md">Changelog</a> •
+  <a href="./docs/PROJECT_STATE.md">Architecture docs</a> •
+  <a href="https://revolut.me/vladrev76">Support</a>
+</p>
+
+> **Claude's project.** v0.5 ships an end-to-end installer + Windows
+> service + tray app. Daily-driveable on a ROG Maximus Z690 Extreme.
+> If it saves you 700 MB of RAM and your sanity,
+> [tip Vlad](https://revolut.me/vladrev76) — he runs the test rig.
 
 A lightweight, native Windows app that drives ROG hardware — AniMe
 Matrix, motherboard LiveDash OLED, Ryujin AIO LCD, Aura RGB, fan PWM —
@@ -13,6 +34,14 @@ Before: Armoury Crate + AsusCertService + Aac3572MbHal + ArmouryCrateService
         + Aura Service + LiveUpdate + LightingService          ≈ 700 MB RAM
 After:  Polylux.exe + PolyluxSensorDaemon.exe                  ≈ 230 MB RAM
 ```
+
+## Screenshots
+
+<p align="center">
+  <em>Tabbed UI, live previews, fan PWM control with radial gauges.<br>
+  (Screenshots coming with the next push — the live app is what ships
+  in <a href="https://github.com/vladulus/polylux/releases/latest">v0.5</a>.)</em>
+</p>
 
 ## Status
 
@@ -60,9 +89,16 @@ What's not tested yet:
 
 ## Install
 
-Download the latest `Polylux-Setup-<version>.exe` from
-[Releases](https://github.com/vladulus/polylux/releases) and run it.
-One UAC prompt for the whole install — never again afterwards.
+**One-liner** (PowerShell, downloads + runs the latest installer):
+
+```powershell
+irm https://raw.githubusercontent.com/vladulus/polylux/main/scripts/install.ps1 | iex
+```
+
+Or manual: download
+[`Polylux-Setup-<version>.exe`](https://github.com/vladulus/polylux/releases/latest)
+from Releases and run it. One UAC prompt for the whole install — never
+again afterwards.
 
 What the installer does:
 
