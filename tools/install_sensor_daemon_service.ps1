@@ -31,6 +31,16 @@ if (-not (Test-Path $exe)) {
 
 $svc = 'PolyluxSensorDaemon'
 
+# Kill any running LibreHardwareMonitor.exe so it releases port 8085 — the
+# v0.4 PolyluxLHM scheduled task launched it elevated at logon, and http.sys
+# would otherwise keep routing /data.json to it after our service starts.
+$lhmProcs = Get-Process -Name LibreHardwareMonitor -ErrorAction SilentlyContinue
+if ($lhmProcs) {
+    Write-Host "Stopping legacy LibreHardwareMonitor.exe (v0.4 path)..." -ForegroundColor Cyan
+    $lhmProcs | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+}
+
 Write-Host "Stopping existing $svc service if present..." -ForegroundColor Cyan
 sc.exe stop $svc 2>&1 | Out-Null
 Start-Sleep -Seconds 1
