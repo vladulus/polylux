@@ -52,11 +52,20 @@ def _build_tray_icon(accent: str = "#C15F3C") -> QIcon:
 
 
 class PolyluxApp:
-    """Bundles QApplication + tray icon + main window."""
+    """Bundles QApplication + tray icon + main window.
 
-    def __init__(self, state: ServiceState, skin_name: str = "claude"):
+    ``start_minimized=True`` keeps the main window hidden at launch and
+    surfaces a one-shot tray notification so the user knows Polylux is
+    running. Used by the autostart Run-key so boot doesn't pop the
+    full window. Manual launches (Start menu, desktop shortcut) leave
+    it ``False`` so the window opens immediately on click.
+    """
+
+    def __init__(self, state: ServiceState, skin_name: str = "claude",
+                 start_minimized: bool = False):
         self._state = state
         self._skin = load_skin(skin_name)
+        self._start_minimized = start_minimized
         self._app = QApplication.instance() or QApplication(sys.argv)
         self._app.setQuitOnLastWindowClosed(False)
         # Set a sane application-wide default font so widgets without
@@ -67,6 +76,15 @@ class PolyluxApp:
         self._app.setFont(default_font)
         self._window = MainWindow(state=state, skin=self._skin)
         self._tray = self._build_tray()
+        if not start_minimized:
+            self._show_window()
+        elif self._tray.supportsMessages():
+            self._tray.showMessage(
+                "Polylux",
+                "Running in tray. Click the icon to open.",
+                QSystemTrayIcon.MessageIcon.Information,
+                3000,
+            )
 
     def _build_tray(self) -> QSystemTrayIcon:
         tray = QSystemTrayIcon(self._app)

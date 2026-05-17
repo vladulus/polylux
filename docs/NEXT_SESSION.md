@@ -1,10 +1,11 @@
 # Next session — pick up here
 
-> Read `PROJECT_STATE.md` **§18 first** — 2026-05-17 the v0.5 Windows
-> installer landed (PyInstaller + Inno Setup, 77 MB single-exe, full
-> end-to-end verified on Z690 Extreme). §17 (same day) shipped the
-> headless sensor daemon. Then read §2 + §2b for the working agreement,
-> then §16 for v0.4 ship recap.
+> Read `PROJECT_STATE.md` **§18 + §18.7 first** — 2026-05-17 the v0.5
+> Windows installer landed (PyInstaller + Inno Setup, 77 MB single-exe);
+> §18.7 the same-day polish round (tray-only autostart via --minimized,
+> Inno [Code] uninstall-prior-version, optional disable-ASUS-services
+> task). §17 shipped the headless sensor daemon. Then read §2 + §2b for
+> the working agreement, then §16 for v0.4 ship recap.
 
 ## TL;DR — what works as of v0.4 (2026-05-14)
 

@@ -466,6 +466,10 @@ def main() -> int:
                         help="Skip kill_asus_stack (override config)")
     parser.add_argument("--headless", action="store_true",
                         help="No UI / tray (for running as Windows service)")
+    parser.add_argument("--minimized", action="store_true",
+                        help="Start with the window hidden — tray icon only. "
+                             "Used by the autostart Run-key so boot doesn't "
+                             "pop a window. Click the tray icon to open the UI.")
     parser.add_argument("--skin", default="claude",
                         help="UI skin name (default: claude)")
     args = parser.parse_args()
@@ -550,9 +554,13 @@ def main() -> int:
             pass
     else:
         # Qt event loop — UI + tray
-        log.info("Polylux running. Tray icon active, UI on tray click.")
+        if args.minimized:
+            log.info("Polylux running minimized. Tray icon active, UI on tray click.")
+        else:
+            log.info("Polylux running. Window open + tray icon.")
         from polylux.ui.app import PolyluxApp
-        app = PolyluxApp(state=state, skin_name=args.skin)
+        app = PolyluxApp(state=state, skin_name=args.skin,
+                         start_minimized=args.minimized)
         # Bridge Qt quit -> stop_event
         app._app.aboutToQuit.connect(_stop_event.set)
         rc = app.exec()

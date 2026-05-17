@@ -2082,3 +2082,111 @@ Service `BINARY_PATH_NAME` correctly repointed from the dev path to
   - Admin-mode install writing to HKCU: works for single-user rigs
     (admin == user); pivot to per-user dialog for multi-user
     deployments.
+
+### 18.7 v0.5 — installer polish round (2026-05-17, same day)
+
+Three follow-up issues surfaced after the first end-to-end ship:
+
+1. **Window popped at every launch** (no tray-only autostart). Polylux
+   created `MainWindow` but never called `show()` — yet on Windows
+   the Qt event loop was rendering it anyway. Either way, the
+   autostart-from-boot UX needed an explicit "tray only" mode.
+2. **No fresh-install path** — re-running the installer over an
+   existing install left orphan files from the prior version. Vlad
+   wanted "always uninstall prior, then install."
+3. **No "kill AC" hook in the installer** — Polylux's runtime
+   `kill_asus_stack()` only neutralizes for the session; AC respawns
+   at every boot. Vlad asked for an uninstall-AC option; pushed back
+   technically (AC uninstall is a known foot-gun across the ASUS app
+   family — drivers, services, shared components, scheduled tasks,
+   half the apps have no silent uninstall flag, the community tool
+   leaves residue). Compromise: an optional install task that
+   STOPs + DISABLES the services and scheduled tasks, fully
+   reversible from services.msc.
+
+#### 18.7.1 What changed
+
+  - **`polylux/service/main.py`** — new `--minimized` CLI flag,
+    plumbed into `PolyluxApp(start_minimized=...)`.
+  - **`polylux/ui/app.py`** — `PolyluxApp.__init__` now defaults to
+    `start_minimized=False` (window opens immediately, matching
+    every normal Windows app). When `True` (passed by the autostart
+    Run-key), the window stays hidden and a one-shot tray balloon
+    "Running in tray. Click the icon to open." surfaces so the user
+    knows the app is alive. Click the tray icon → window appears.
+  - **`installer/Polylux.iss`**:
+      - `[Tasks]` gained `neutralize_asus` (default checked, with
+        a label that's explicit about reversibility).
+      - `[Registry]` HKCU Run value now includes `--minimized`.
+      - `[Run]` invokes `neutralize-asus.cmd` before
+        `register-service.cmd` so AsusCertService is down before
+        the sensor daemon claims port 8085.
+      - New `[Code]` section: `CurStepChanged(ssInstall)` queries
+        `HKLM\...\Uninstall\{AppId}_is1\UninstallString`, falls
+        back to HKCU, and if found `Exec()`s `unins000.exe
+        /VERYSILENT /SUPPRESSMSGBOXES /NORESTART` then sleeps
+        1.5 s to let SCM + filesystem settle. Result: every
+        Polylux-Setup invocation produces a pristine `{app}` tree,
+        no leftover dlls / stale Python bytecode / orphan files
+        from an older release.
+  - **`installer/neutralize-asus.cmd`** — new helper. Two-phase:
+    kill child processes FIRST (`Aac3572MbHal_x86`, `ArmouryCrate`,
+    `LightingService`, …), THEN stop + `Set-Service -StartupType
+    Disabled` the services (`ArmouryCrateService`,
+    `AsusCertService`, `AsusFanControlService`, `LightingService`,
+    `ROGLiveService`, `ROGLiveServiceV2`, `asComSvc`). Order
+    matters: AsusCertService refuses to stop while its
+    Aac3572MbHal child is alive — naïve `sc stop AsusCertService`
+    silently fails with Access Denied even from elevated context.
+    Also disables known ASUS scheduled tasks. Re-killing
+    respawned processes at the end catches any service-managed
+    children that resurrected during the sequence.
+
+#### 18.7.2 End-to-end verification (2026-05-17 11:00)
+
+Reinstall over prior install:
+
+```
+[Polylux] ssInstall: checking for prior install at Software\…\{B9F1A2C8-…}_is1
+[Polylux] Prior install detected; running C:\Program Files\Polylux\unins000.exe
+[Polylux] Prior uninstaller exit code: 0
+[neutralize-asus.cmd]   …
+[register-service.cmd]  …
+
+Get-Service ArmouryCrateService,AsusCertService,AsusFanControlService,LightingService
+Name                   Status    StartType
+----                   ------    ---------
+ArmouryCrateService    Stopped   Disabled
+AsusCertService        Stopped   Disabled
+AsusFanControlService  Stopped   Disabled
+LightingService        Stopped   Disabled
+
+PolyluxSensorDaemon: STATE = RUNNING
+
+HKCU\…\Run\Polylux:
+"C:\Program Files\Polylux\Polylux.exe" --minimized --config "%APPDATA%\Polylux\polylux.yaml"
+```
+
+Two launch modes confirmed:
+  - `--minimized`: process spawned, "Polylux running minimized. Tray
+    icon active, UI on tray click." logged. Memory ~107 MB
+    (no Qt window allocated).
+  - No flag: "Polylux running. Window open + tray icon." Memory
+    ~207 MB (Qt widget tree rendered).
+
+#### 18.7.3 Why neither full AC uninstall nor a "remove AC" checkbox
+
+Pushed back on Vlad's initial ask for a "remove Armoury Crate"
+option. AC isn't one app: it's a sprawl of ArmouryCrate, AURA,
+AsusCert, AI Suite components, LiveDash, Sonic Studio, ASUS
+System Control Interface drivers, AC Lite, AAH, etc. Each has its
+own installer. None ship a documented silent-uninstall flag.
+ASUS provides a "Armoury Crate Uninstall Tool" but the community
+reports residual scheduled tasks, dangling kernel driver entries,
+and motherboard-sensor breakage after using it. Repairs typically
+require a clean Windows reinstall.
+
+Polylux's "disable, don't uninstall" approach gives the same
+operational result (AC stays down forever, drivers / sensors are
+still callable by other apps if needed) at zero risk and with a
+trivial revert path (Set-Service back to Automatic in services.msc).
