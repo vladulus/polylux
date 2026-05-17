@@ -38,6 +38,12 @@ OutputBaseFilename=Polylux-Setup-{#MyAppVersion}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
+; Detect any running Polylux.exe at install start and ask it to close
+; (force=yes makes /SILENT installs close it without prompting). The
+; running instance would otherwise hold _internal/PyQt6/*.dll open
+; and the file overwrite would fail.
+CloseApplications=force
+RestartApplications=no
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayName={#MyAppName} {#MyAppVersion}
@@ -112,12 +118,16 @@ Filename: "{app}\register-service.cmd"; \
     StatusMsg: "Installing Polylux Sensor Daemon service..."; \
     Flags: runhidden waituntilterminated
 
-; Optional: launch Polylux right after install completes. Window opens
-; (no --minimized) so the user actually sees something happen.
+; Auto-launch Polylux at end of install, minimized to tray. Works in
+; both GUI and /SILENT modes — like OneDrive / Discord / Steam,
+; install finishes and the app is just running, ready to use, in tray.
+; nowait so the installer doesn't block on the Qt event loop.
+; runasoriginaluser so the launched Polylux runs as the actual logged-in
+; user, not the elevated admin context (matches what HKCU Run does at
+; next boot — same user, same env, same APPDATA).
 Filename: "{app}\{#MyAppExeName}"; \
-    Parameters: "--config ""{userappdata}\{#MyAppName}\polylux.yaml"""; \
-    Description: "Launch {#MyAppName} now"; \
-    Flags: postinstall nowait skipifsilent unchecked
+    Parameters: "--minimized --config ""{userappdata}\{#MyAppName}\polylux.yaml"""; \
+    Flags: nowait runasoriginaluser
 
 [UninstallRun]
 Filename: "{app}\unregister-service.cmd"; \
