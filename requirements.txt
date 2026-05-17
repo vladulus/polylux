@@ -1,0 +1,29 @@
+# Polylux runtime dependencies.
+# Tested on Python 3.13 / 3.14 (Windows). PyQt6 wheels for 3.14 are
+# new — drop to 3.12 if your venv refuses to find them.
+
+# UI
+PyQt6>=6.7
+pystray>=0.19.5
+
+# Drivers
+libusb>=1.0
+hidapi>=0.14
+pyusb>=1.2
+openrgb-python>=0.3
+
+# Sensors
+psutil>=5.9
+nvidia-ml-py>=12.0     # GPU temps / load via NVML
+WMI>=1.5                # Windows-only management interface
+pywin32>=305            # Win32 API bindings (services, registry)
+
+# Config + media
+PyYAML>=6.0
+Pillow>=10.0
+
+# Crypto (Aura SDK key extraction)
+cryptography>=41
+
+# Build / freeze (dev-only — comment out for runtime-only installs)
+pyinstaller>=6.0
