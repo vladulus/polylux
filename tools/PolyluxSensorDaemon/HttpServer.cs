@@ -1,8 +1,21 @@
 using System.Net;
+using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Polylux.SensorDaemon;
+
+internal sealed class FanControlRequest
+{
+    public string Mode { get; set; } = "";   // "software" | "manual" | "default" | "auto"
+    public float? Value { get; set; }        // 0..100, only used when mode=software
+}
+
+internal static class StringExtensions
+{
+    public static byte[] Encode(this string s) => Encoding.UTF8.GetBytes(s);
+}
 
 /// <summary>
 /// Tiny <see cref="HttpListener"/> wrapper that serves the
@@ -52,6 +65,44 @@ public sealed class HttpServer : BackgroundService
         try { _listener.Close(); } catch { /* ignored */ }
     }
 
+    private async Task HandleFanControlAsync(HttpListenerContext ctx, string path)
+    {
+        // POST /control/fan/<URL-encoded sensor identifier>
+        // body: {"mode":"software","value":30}  or  {"mode":"default"}
+        var sensorId = Uri.UnescapeDataString(path.Substring("/control/fan/".Length));
+        if (string.IsNullOrWhiteSpace(sensorId))
+        {
+            ctx.Response.StatusCode = 400;
+            return;
+        }
+        FanControlRequest? req;
+        try
+        {
+            using var sr = new System.IO.StreamReader(ctx.Request.InputStream);
+            var body = await sr.ReadToEndAsync().ConfigureAwait(false);
+            req = JsonSerializer.Deserialize<FanControlRequest>(body,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "fan control: bad JSON for {sid}", sensorId);
+            ctx.Response.StatusCode = 400;
+            return;
+        }
+        if (req is null || string.IsNullOrWhiteSpace(req.Mode))
+        {
+            ctx.Response.StatusCode = 400;
+            return;
+        }
+
+        var ok = _collector.SetFanControl(sensorId, req.Mode, req.Value);
+        ctx.Response.StatusCode = ok ? 200 : 404;
+        var payload = (ok ? "{\"ok\":true}" : "{\"ok\":false}").Encode();
+        ctx.Response.ContentType = "application/json";
+        ctx.Response.ContentLength64 = payload.Length;
+        await ctx.Response.OutputStream.WriteAsync(payload).ConfigureAwait(false);
+    }
+
     private async Task HandleAsync(HttpListenerContext ctx)
     {
         try
@@ -78,7 +129,15 @@ public sealed class HttpServer : BackgroundService
                     break;
                 }
                 default:
-                    ctx.Response.StatusCode = 404;
+                    if (path.StartsWith("/control/fan/", StringComparison.Ordinal)
+                        && ctx.Request.HttpMethod == "POST")
+                    {
+                        await HandleFanControlAsync(ctx, path).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        ctx.Response.StatusCode = 404;
+                    }
                     break;
             }
         }

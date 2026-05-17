@@ -146,11 +146,17 @@ class ServiceState:
                 "oled": asdict(self._cfg.oled),
                 "ryujin_lcd": asdict(self._cfg.ryujin_lcd),
                 "aura_rgb": asdict(self._cfg.aura_rgb),
+                "fans": asdict(self._cfg.fans),
             }
         # Drop class-level constants
         for d in data.values():
-            for key in ("SCENES", "VALUE_SOURCES"):
+            for key in ("SCENES", "VALUE_SOURCES", "MODES", "PRESET_DUTY"):
                 d.pop(key, None)
+        # FansConfig.fans is a list of FanConfig dataclasses; asdict
+        # recurses, but the nested dicts may still carry MODES/PRESET_DUTY.
+        for fan_dict in data.get("fans", {}).get("fans", []) or []:
+            for key in ("MODES", "PRESET_DUTY"):
+                fan_dict.pop(key, None)
         try:
             self._yaml_path.write_text(
                 yaml.safe_dump(data, sort_keys=False, default_flow_style=False),

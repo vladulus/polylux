@@ -82,6 +82,71 @@ public sealed class SensorCollector : BackgroundService
         }
     }
 
+    /// <summary>
+    /// Apply a fan-control request to a Control-type sensor identified
+    /// by its LHM identifier (e.g. <c>/lpc/nct6798d/0/control/0</c>).
+    /// Returns ``true`` on success, ``false`` if the sensor wasn't found
+    /// or has no Control interface (i.e. read-only fan tachometer).
+    /// </summary>
+    public bool SetFanControl(string sensorId, string mode, float? value)
+    {
+        var sensor = FindSensorByIdentifier(sensorId);
+        if (sensor?.Control is null)
+        {
+            _log.LogWarning("SetFanControl: sensor {id} not found or has no IControl", sensorId);
+            return false;
+        }
+        try
+        {
+            switch (mode.ToLowerInvariant())
+            {
+                case "default":
+                case "auto":
+                    sensor.Control.SetDefault();
+                    _log.LogInformation("Fan {id} → default (BIOS control)", sensorId);
+                    return true;
+                case "software":
+                case "manual":
+                    if (value is null) return false;
+                    var clamped = Math.Clamp(value.Value, 0f, 100f);
+                    sensor.Control.SetSoftware(clamped);
+                    _log.LogInformation("Fan {id} → software {pct:0.0}%", sensorId, clamped);
+                    return true;
+                default:
+                    return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Fan {id} control failed", sensorId);
+            return false;
+        }
+    }
+
+    private ISensor? FindSensorByIdentifier(string sensorId)
+    {
+        foreach (var hw in _computer.Hardware)
+        {
+            var hit = FindIn(hw, sensorId);
+            if (hit is not null) return hit;
+        }
+        return null;
+    }
+
+    private static ISensor? FindIn(IHardware hw, string sensorId)
+    {
+        foreach (var s in hw.Sensors)
+        {
+            if (s.Identifier.ToString() == sensorId) return s;
+        }
+        foreach (var sub in hw.SubHardware)
+        {
+            var hit = FindIn(sub, sensorId);
+            if (hit is not null) return hit;
+        }
+        return null;
+    }
+
     private void Refresh()
     {
         try

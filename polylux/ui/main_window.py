@@ -29,6 +29,7 @@ NAV_ITEMS = [
     ("oled",       "▭  OLED"),
     ("aura_rgb",   "✦  Aura RGB"),
     ("ryujin_lcd", "≋  Ryujin LCD"),
+    ("fans",       "✺  Fans"),
     ("settings",   "⚙  Settings"),
 ]
 
@@ -78,6 +79,7 @@ class MainWindow(QMainWindow):
         from polylux.ui.pages.oled import OledPage
         from polylux.ui.pages.aura_rgb import AuraRGBPage
         from polylux.ui.pages.ryujin import RyujinPage
+        from polylux.ui.pages.fans import FansPage
         from polylux.ui.pages.settings import SettingsPage
 
         self._pages = {
@@ -86,6 +88,7 @@ class MainWindow(QMainWindow):
             "oled":       OledPage(state),
             "aura_rgb":   AuraRGBPage(state),
             "ryujin_lcd": RyujinPage(state),
+            "fans":       FansPage(state),
             "settings":   SettingsPage(state, skin),
         }
         for key, _ in NAV_ITEMS:

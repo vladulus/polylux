@@ -219,6 +219,71 @@ class AuraRGBConfig:
 
 
 @dataclass
+class FanConfig:
+    """One controllable fan on a Super-IO chip (e.g. Nuvoton NCT6798D).
+
+    The Polylux runner POSTs to the sensor daemon every
+    ``FansConfig.update_seconds`` to enforce the chosen mode. ``auto``
+    leaves the chip in default (BIOS) control mode — Polylux performs
+    a one-shot ``SetDefault`` then stops fighting the BIOS curve.
+    """
+    sensor_id: str = ""               # e.g. "/lpc/nct6798d/0/control/0"
+    name: str = ""                    # user label, e.g. "CPU FAN"
+    mode: str = "auto"                # auto / off / silent / medium / full / curve
+    temp_source: str = "cpu package"  # which key from sensor_daemon.temps() drives the curve
+    # 4 anchor points (temp_c, duty_pct). Linear interp between, clamped
+    # to first/last duty outside the range. Used when mode="curve".
+    curve: tuple[tuple[float, float], ...] = (
+        (35.0, 0.0),
+        (50.0, 30.0),
+        (70.0, 60.0),
+        (85.0, 100.0),
+    )
+
+    MODES = ("auto", "off", "silent", "medium", "full", "curve")
+    # Preset percentages — single source of truth for both UI labels and
+    # the runner's preset → duty resolution.
+    PRESET_DUTY = {
+        "off":    0.0,
+        "silent": 30.0,
+        "medium": 60.0,
+        "full":   100.0,
+    }
+
+    def validate(self) -> None:
+        if not self.sensor_id:
+            raise ValueError("fan.sensor_id is required")
+        if self.mode not in self.MODES:
+            raise ValueError(f"fan.mode must be one of {self.MODES}, got {self.mode!r}")
+        if self.mode == "curve":
+            if not self.curve or len(self.curve) < 2:
+                raise ValueError("fan.curve must have at least 2 anchor points")
+            for t, d in self.curve:
+                if not 0 <= d <= 100:
+                    raise ValueError(f"fan.curve duty must be 0..100, got {d}")
+                if not -50 <= t <= 150:
+                    raise ValueError(f"fan.curve temp must be -50..150, got {t}")
+
+
+@dataclass
+class FansConfig:
+    """Fan-control device (Super-IO PWM)."""
+    enabled: bool = False
+    update_seconds: float = 3.0       # how often the runner re-evaluates each fan
+    fans: list[FanConfig] = field(default_factory=list)
+
+    def validate(self) -> None:
+        if not 0.5 <= self.update_seconds <= 30.0:
+            raise ValueError(f"fans.update_seconds must be 0.5..30.0, got {self.update_seconds}")
+        seen = set()
+        for f in self.fans:
+            f.validate()
+            if f.sensor_id in seen:
+                raise ValueError(f"fans.fans contains duplicate sensor_id: {f.sensor_id}")
+            seen.add(f.sensor_id)
+
+
+@dataclass
 class ServiceConfig:
     """Service-level settings."""
     kill_asus_stack: bool = True
@@ -234,12 +299,14 @@ class PolyluxConfig:
     oled: OledConfig = field(default_factory=OledConfig)
     ryujin_lcd: RyujinLcdConfig = field(default_factory=RyujinLcdConfig)
     aura_rgb: AuraRGBConfig = field(default_factory=AuraRGBConfig)
+    fans: FansConfig = field(default_factory=FansConfig)
 
     def validate(self) -> None:
         self.matrix.validate()
         self.oled.validate()
         self.ryujin_lcd.validate()
         self.aura_rgb.validate()
+        self.fans.validate()
 
 
 def load(path: str | Path = DEFAULT_CONFIG_PATH) -> PolyluxConfig:
@@ -306,6 +373,30 @@ def load(path: str | Path = DEFAULT_CONFIG_PATH) -> PolyluxConfig:
     if "types" in a and isinstance(a["types"], list):
         cfg.aura_rgb.types = tuple(str(t).upper() for t in a["types"])
     cfg.aura_rgb.brightness = int(a.get("brightness", cfg.aura_rgb.brightness))
+
+    fans_raw = raw.get("fans") or {}
+    cfg.fans.enabled = bool(fans_raw.get("enabled", False))
+    cfg.fans.update_seconds = float(fans_raw.get("update_seconds", cfg.fans.update_seconds))
+    fan_list = fans_raw.get("fans") or []
+    if isinstance(fan_list, list):
+        cfg.fans.fans = []
+        for entry in fan_list:
+            if not isinstance(entry, dict):
+                continue
+            fan = FanConfig()
+            fan.sensor_id = str(entry.get("sensor_id", ""))
+            fan.name = str(entry.get("name", fan.sensor_id))
+            fan.mode = str(entry.get("mode", fan.mode))
+            fan.temp_source = str(entry.get("temp_source", fan.temp_source))
+            curve_raw = entry.get("curve")
+            if isinstance(curve_raw, list) and curve_raw:
+                pts = []
+                for p in curve_raw:
+                    if isinstance(p, (list, tuple)) and len(p) == 2:
+                        pts.append((float(p[0]), float(p[1])))
+                if pts:
+                    fan.curve = tuple(pts)
+            cfg.fans.fans.append(fan)
 
     cfg.validate()
     return cfg

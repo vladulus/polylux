@@ -378,6 +378,29 @@ def run_oled(chip, state: ServiceState, stop: threading.Event) -> None:
             slept += step
 
 
+def run_fans(state: ServiceState, stop: threading.Event) -> None:
+    """Push fan PWM settings to the sensor daemon on a timer.
+
+    Each tick: snapshot current config + temps, resolve each fan's
+    target duty (preset or interpolated curve), POST it to the
+    daemon. The chip remembers the last write, so misses are
+    self-healing on the next tick.
+    """
+    from polylux.sensors.fan_control import apply_all
+    from polylux.sensors.lhm import LHMSensors
+
+    sensors = LHMSensors()
+    while not stop.is_set():
+        fcfg = state.snapshot().fans
+        if fcfg.enabled and fcfg.fans:
+            try:
+                temps = {k.lower(): v for k, v in sensors.temps().items()}
+                apply_all(fcfg.fans, temps)
+            except Exception as ex:
+                log.warning("fan runner tick failed: %s", ex)
+        stop.wait(max(0.5, fcfg.update_seconds))
+
+
 def run_aura_rgb(state: ServiceState, stop: threading.Event) -> None:
     from polylux.drivers.aura_rgb import AuraRGB, AuraRGBError
 
@@ -532,6 +555,7 @@ def main() -> int:
     log.info("  oled.enabled=%s scene=%s", cfg.oled.enabled, cfg.oled.scene)
     log.info("  ryujin_lcd.enabled=%s scene=%s", cfg.ryujin_lcd.enabled, cfg.ryujin_lcd.scene)
     log.info("  aura_rgb.enabled=%s scene=%s", cfg.aura_rgb.enabled, cfg.aura_rgb.scene)
+    log.info("  fans.enabled=%s count=%d", cfg.fans.enabled, len(cfg.fans.fans))
 
     if cfg.service.kill_asus_stack and not args.no_kill_asus:
         log.info("killing ASUS stack (Aac3572MbHal + services)...")
@@ -576,6 +600,14 @@ def main() -> int:
                              daemon=True, name="aura_rgb")
         t.start()
         threads.append(t)
+
+    # Always start run_fans — it idles when fans.enabled=False, so the
+    # user can toggle ENABLED in the UI mid-session and have the runner
+    # pick it up on the next tick without restarting Polylux.
+    t = threading.Thread(target=run_fans, args=(state, _stop_event),
+                         daemon=True, name="fans")
+    t.start()
+    threads.append(t)
 
     if cfg.ryujin_lcd.enabled and cfg.ryujin_lcd.scene == "hardware_monitor":
         log.info("ryujin_lcd: firmware-default hw monitor active (no thread needed)")
