@@ -490,9 +490,10 @@ def main() -> int:
         kill_asus_stack()
 
     # Bring up bundled external services so the user gets a one-process feel.
-    # LHM needs admin → scheduled task triggers it elevated, no UAC.
+    # Sensor daemon: prefer the PolyluxSensorDaemon Windows service (installed
+    # once, runs as LocalSystem, zero UAC); fall back to subprocess for dev.
     # OpenRGB runs in user mode → spawn directly.
-    external.ensure_lhm()
+    external.ensure_sensor_daemon()
     if cfg.aura_rgb.enabled:
         external.launch_openrgb()
 

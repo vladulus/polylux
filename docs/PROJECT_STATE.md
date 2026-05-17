@@ -1823,3 +1823,112 @@ The full v0.4 work spans ~60 commits between the spec/plan landing
   - Skin system carried over from v0.3, all new QSS additive.
   - 72 tests green (excluding the pre-existing
     test_anime_matrix_usb_direct breakage from the chip 1A21 refactor).
+
+### 17 v0.5 — Headless sensor daemon (2026-05-17)
+
+The v0.4 ship left LibreHardwareMonitor.exe running as a scheduled task
+on logon — solving the admin-for-sensors problem but polluting the
+system tray with the LHM GUI. §17 replaces that with a custom headless
+daemon in `tools/PolyluxSensorDaemon/` that wraps the same
+`LibreHardwareMonitorLib.dll`, exposes the same `data.json` HTTP API
+Polylux's parser already reads (`polylux/sensors/lhm.py`), and runs as
+a Windows service with zero UI / zero tray icon / zero UAC after a
+one-time install.
+
+#### 17.1 What ships
+
+  - **C# / .NET 8 LTS console app** (`tools/PolyluxSensorDaemon/`)
+    structured around `Microsoft.Extensions.Hosting` so the same
+    binary runs interactively (`PolyluxSensorDaemon.exe`) for dev and
+    as a Windows service (`AddWindowsService()`) for prod — no
+    separate code path.
+      - `Program.cs`: CLI args (`--bind`, `--port`, `--update-ms`),
+        host setup, DI wiring.
+      - `SensorCollector.cs`: opens an LHM `Computer` with
+        CPU + GPU + Motherboard + Controller + Memory enabled, polls
+        on a timer via `IVisitor`, builds the JSON tree on each tick.
+      - `HttpServer.cs`: `HttpListener` bound to `127.0.0.1` only
+        (no URL ACL needed even as LocalSystem), serves `/data.json`
+        and `/health`.
+  - **JSON wire format** matches LHM's Remote Web Server exactly
+    (root `{id, Text, Children}` → PC → hardware → sensor-type groups
+    → leaves with `{id, Text, Min, Value, Max, SensorId, Type,
+    Children: []}`). Verified end-to-end by pointing
+    `polylux.sensors.lhm.LHMSensors` at the daemon — GPU temps and
+    fans round-tripped without changes to the parser.
+  - **Single-file self-contained publish** — 36 MB exe, .NET 8
+    runtime bundled, single-file extraction at first launch,
+    compression enabled. Built via
+    `tools/build_sensor_daemon.ps1` (no admin; auto-installs the
+    .NET 8 SDK per-user under `%LOCALAPPDATA%\Microsoft\dotnet\` if
+    missing).
+  - **Service install script** — `tools/install_sensor_daemon_service.ps1`
+    self-elevates via UAC, runs `sc create` with auto-start, sets a
+    crash-recovery policy (restart 5 s × 2, then 30 s), starts the
+    service, smoke-tests `http://127.0.0.1:8085/health`, and cleans
+    up the legacy `PolyluxLHM` scheduled task left over from v0.4.
+  - **Uninstall script** — `tools/uninstall_sensor_daemon_service.ps1`
+    self-elevates, stops + deletes the service. Leaves the exe in
+    place as a build artifact.
+
+#### 17.2 Polylux service integration
+
+`polylux/service/external.py` was renamed `ensure_lhm()` →
+`ensure_sensor_daemon()` and rewritten to prefer paths in this order:
+
+  1. If the `PolyluxSensorDaemon` Windows service is installed:
+     `sc start` it (no-op if already RUNNING). LocalSystem → zero
+     UAC for the lifetime of the install.
+  2. If the published exe exists but no service: spawn the exe as a
+     `CREATE_NO_WINDOW` child process (dev mode; sensors that need
+     ring-0 access still require Polylux itself to be elevated).
+  3. Neither: log a single warning pointing at the build + install
+     scripts — Dashboard fans/temps will be blank until the user
+     resolves it, but Polylux still runs.
+
+The legacy `schtasks /Run /TN PolyluxLHM` path is gone.
+
+#### 17.3 Why .NET 8 LTS + Hosting + NuGet LHM lib
+
+  - **.NET 8 LTS** over .NET 9 / .NET Framework 4.7.2: LTS until
+    2026-11, runtime already present on the dev box, multi-target
+    LHM lib has a `net8.0` build so no compat shims.
+  - **`Microsoft.Extensions.Hosting` + `AddWindowsService()`** over a
+    raw `ServiceBase` subclass: same code runs in both modes,
+    canonical idiom in current .NET docs, the DI / logging overhead
+    is ~2 MB after compression — negligible against the 30 MB
+    runtime.
+  - **NuGet `LibreHardwareMonitorLib 0.9.6`** over referencing the
+    DLL shipped under `tools/LibreHardwareMonitor/`: the NuGet
+    package multi-targets `net472` and `net8.0`; referencing the
+    `net8.0` build avoids the .NET-Framework-compat shim that the
+    bundled DLL would force.
+
+#### 17.4 Install flow for v0.5 end-user
+
+```
+git clone polylux
+powershell -ExecutionPolicy Bypass -File tools\build_sensor_daemon.ps1
+powershell -ExecutionPolicy Bypass -File tools\install_sensor_daemon_service.ps1
+python -m polylux.service
+```
+
+One UAC at install time, then the daemon auto-starts at boot
+forever. Polylux itself runs un-elevated.
+
+#### 17.5 Known limits (v0.5+ work)
+
+  - The build step still needs an .NET SDK (auto-installed per-user
+    by the build script if missing). For a fully UAC-free user
+    experience, the v0.5 installer (next §) should ship the
+    pre-built exe in the release artifact so no SDK is needed at
+    install time.
+  - The daemon writes no log file when running as a service. Crashes
+    surface via Service Control Manager events in Event Viewer
+    (good enough for v0.5; structured logging is a v0.6 polish
+    item).
+  - 17 lines of `SensorType` formatters in `SensorCollector.cs`
+    duplicate LHM's internal `ValueToString` switch. If LHM adds a
+    new sensor type the daemon will fall through to invariant
+    `ToString()`. Polylux only consumes Fan + Temperature today, so
+    not load-bearing.

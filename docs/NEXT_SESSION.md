@@ -1,9 +1,10 @@
 # Next session — pick up here
 
-> Read `PROJECT_STATE.md` **§16 first** — 2026-05-13 → 2026-05-14 was the
-> v0.4 SHIP day. Tabbed UI shipped, LHM/OpenRGB bundled, matrix marquee
-> + OLED scroll + image GIF all live. Then read §2 + §2b for the
-> working agreement, then §16.
+> Read `PROJECT_STATE.md` **§17 first** — 2026-05-17 the v0.5 sensor
+> daemon landed (custom C# / .NET 8 LHM-lib wrapper, single-file 36 MB
+> exe, Windows service, supersedes the v0.4 LHM-as-scheduled-task path).
+> Then read §2 + §2b for the working agreement, then §16 for v0.4 ship
+> recap.
 
 ## TL;DR — what works as of v0.4 (2026-05-14)
 
@@ -43,21 +44,26 @@
 
 Ordered by impact for v0.5 public launch.
 
-1. **Custom headless sensor daemon** (replace LHM.exe). Vlad's biggest
-   gripe with v0.4 is the LHM tray icon. The v0.5 fix: a small C#
-   console app that uses `LibreHardwareMonitorLib.dll` directly and
-   exposes the same `http://127.0.0.1:8085/data.json` API. Runs as a
-   true Windows service (no UI = session 0 works), auto-starts at
-   boot, zero tray pollution. ~150 lines of C#. Ship in `tools/` as a
-   single signed exe + the lib DLL.
+1. **~~Custom headless sensor daemon~~ — DONE 2026-05-17 (§17).**
+   `tools/PolyluxSensorDaemon/` is built, tested, wired into
+   `polylux/service/external.py`. Vlad still needs to run
+   `tools/install_sensor_daemon_service.ps1` elevated once to register
+   the Windows service and verify live sensors. Until then the
+   subprocess fallback runs (dev mode).
 
-2. **Installer (.msi or NSIS / Inno Setup)**. Currently install is
-   "clone repo + run service". For public launch:
-   - Bundle: Python embedded distribution, all wheels, tools/, polylux.yaml default
+2. **Installer (.msi or NSIS / Inno Setup)** — now the top remaining
+   v0.5 item. Currently install is "clone repo + run service +
+   PowerShell scripts". For public launch:
+   - Bundle: Python embedded distribution, all wheels, tools/,
+     polylux.yaml default, the pre-built sensor-daemon exe so end
+     users never need a .NET SDK
    - Install location: `%PROGRAMFILES%\Polylux\`
-   - Registers the sensor daemon as a Windows service (auto-start)
-   - Adds Polylux to Run-on-logon (HKCU\Software\Microsoft\Windows\CurrentVersion\Run)
-   - Start menu shortcut + uninstaller
+   - Registers `PolyluxSensorDaemon` Windows service (auto-start at
+     boot) — the §17 install logic, but baked into the installer
+   - Adds Polylux to Run-on-logon
+     (HKCU\Software\Microsoft\Windows\CurrentVersion\Run)
+   - Start menu shortcut + uninstaller (uninstall must also stop +
+     delete the sensor daemon service)
    - One UAC for the whole install — never again afterward.
 
 3. **OLED protocol research** (capture session with AC):
@@ -100,14 +106,20 @@ Ordered by impact for v0.5 public launch.
 
 ## What Claude has access to
 
-  - `tools/LibreHardwareMonitor/` (gitignored) — LHM 0.9.6 portable +
-    scheduled task `PolyluxLHM` registered
+  - `tools/PolyluxSensorDaemon/` (committed source, gitignored
+    bin/obj/publish) — C# / .NET 8 LHM-lib wrapper. Build with
+    `tools/build_sensor_daemon.ps1`, install as a Windows service
+    with `tools/install_sensor_daemon_service.ps1` (elevated). v0.5
+    replacement for the v0.4 LHM scheduled-task path.
+  - `tools/LibreHardwareMonitor/` (gitignored) — LHM 0.9.6 portable;
+    daemon NuGet-references the lib but the bundled exe is now legacy
+    once the sensor-daemon service is installed.
   - `tools/OpenRGB/OpenRGB Windows 64-bit/` (gitignored) — OpenRGB
     portable, started as subprocess by `polylux.service.external`
   - `tools/nssm.exe` — tried for LHM-as-service, doesn't work with the
     GUI binary but available for future use
-  - `tools/register_lhm_task.ps1` / `cleanup_and_restore.ps1` — admin
-    helper scripts
+  - .NET 8 SDK auto-installed per-user at
+    `C:\Users\vlad\AppData\Local\Microsoft\dotnet\` (8.0.421)
   - `.venv/` with PyQt6, pystray, fastapi, openrgb-python, scapy,
     pyusb, hidapi, psutil, pynvml, Pillow, wmi, pytest-qt
 

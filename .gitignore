@@ -35,8 +35,20 @@ config.local.yaml
 
 # tools/ is for locally-downloaded binaries (OpenRGB portable, etc).
 # Polylux fetches them at install-time via scripts/install.py — never
-# commit binaries to the repo.
-tools/
+# commit binaries to the repo. Source we author *does* live in tools/
+# and is re-included below.
+tools/*
+!tools/*.ps1
+!tools/PolyluxSensorDaemon
+tools/PolyluxSensorDaemon/bin
+tools/PolyluxSensorDaemon/obj
+tools/PolyluxSensorDaemon/publish
+# Legacy v0.4 LHM-as-scheduled-task helpers, superseded by
+# tools/install_sensor_daemon_service.ps1 — kept on disk for reference.
+tools/cleanup_and_restore.ps1
+tools/install_lhm_service.ps1
+tools/register_lhm_task.ps1
+tools/revert_lhm_service.ps1
 
 # Brainstorming session content (mockups, state) — regenerated per session.
 .superpowers/
