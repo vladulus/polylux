@@ -109,10 +109,11 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    # console=True for v0.5 MVP so stdout logs from polylux.service stay
-    # visible. v0.6 polish: switch to console=False + file-based logging
-    # so Run-on-logon doesn't pop a black window every boot.
-    console=True,
+    # console=False: no flashing black window on autostart-from-boot,
+    # and no "user closes the console thinking it's stale → process
+    # dies" footgun. Logs go to %APPDATA%\Polylux\polylux.log via the
+    # RotatingFileHandler wired in polylux.service.main._configure_logging.
+    console=False,
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,

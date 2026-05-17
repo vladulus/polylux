@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import logging.handlers
+import os
 import signal
 import sys
 import threading
@@ -457,6 +459,52 @@ def _on_signal(_signum, _frame) -> None:
     _stop_event.set()
 
 
+def _log_dir() -> Path:
+    """Per-user log location. Always writeable, exists across both dev
+    and installed runs (where %APPDATA% is the canonical config home)."""
+    base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+    p = Path(base) / "Polylux"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _configure_logging(level: str) -> None:
+    """Wire log output to BOTH stderr (visible in dev console) AND a
+    rotating file under %APPDATA%\\Polylux\\polylux.log.
+
+    The frozen installer ships with ``console=False`` so stderr is a
+    no-op for end users — the file handler is the only durable record
+    of what happened, especially for crashes during boot autostart.
+    Rotation keeps disk usage bounded (5 × 2 MB max)."""
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    root = logging.getLogger()
+    root.setLevel(level)
+    # Strip any handlers a prior call (e.g. test setup) installed.
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    # Console handler — silently no-op when there's no console attached.
+    sh = logging.StreamHandler(stream=sys.stderr)
+    sh.setFormatter(fmt)
+    root.addHandler(sh)
+    # File handler — the durable record.
+    try:
+        log_path = _log_dir() / "polylux.log"
+        fh = logging.handlers.RotatingFileHandler(
+            log_path, maxBytes=2 * 1024 * 1024, backupCount=5,
+            encoding="utf-8",
+        )
+        fh.setFormatter(fmt)
+        root.addHandler(fh)
+        log.info("log file: %s", log_path)
+    except Exception as ex:
+        # Don't let logging setup take the whole app down — fall back
+        # to console-only and surface the problem.
+        log.warning("file logging unavailable: %s", ex)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Polylux service")
     parser.add_argument("--config", default=str(cfg_mod.DEFAULT_CONFIG_PATH))
@@ -474,11 +522,7 @@ def main() -> int:
                         help="UI skin name (default: claude)")
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=args.log_level,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    _configure_logging(args.log_level)
 
     yaml_path = Path(args.config)
     state = build_state(yaml_path)

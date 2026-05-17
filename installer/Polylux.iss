@@ -48,7 +48,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "autostart"; Description: "Start Polylux automatically when I sign in (minimized to tray)"; GroupDescription: "Startup:"
 Name: "neutralize_asus"; Description: "Disable Armoury Crate / Aura / AsusCert services (Polylux replaces them — fully reversible)"; GroupDescription: "ASUS stack:"
-Name: "desktopicon"; Description: "Create a &desktop icon"; GroupDescription: "Additional icons:"; Flags: unchecked
+Name: "desktopicon"; Description: "Create a &desktop icon"; GroupDescription: "Additional icons:"
 
 [Files]
 ; PyInstaller-frozen app — the whole dist/Polylux/ tree.
@@ -73,12 +73,18 @@ Source: "..\polylux.yaml"; DestDir: "{userappdata}\{#MyAppName}"; \
     DestName: "polylux.yaml"; Flags: onlyifdoesntexist uninsneveruninstall
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; \
-    Parameters: "--config ""{userappdata}\{#MyAppName}\polylux.yaml"""
-Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
+; Drop the shortcut directly under Start Menu\Programs (no Polylux\
+; subfolder) so it shows up under "All apps → P → Polylux" with one
+; click, not nested. Uninstall shortcut next to it for discoverability.
+Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; \
+    Parameters: "--config ""{userappdata}\{#MyAppName}\polylux.yaml"""; \
+    Comment: "Open Polylux (ASUS Armoury Crate replacement)"; \
+    WorkingDir: "{app}"
+Name: "{autoprograms}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; \
     Parameters: "--config ""{userappdata}\{#MyAppName}\polylux.yaml"""; \
-    Tasks: desktopicon
+    Comment: "Open Polylux (ASUS Armoury Crate replacement)"; \
+    WorkingDir: "{app}"; Tasks: desktopicon
 
 [Registry]
 ; Run-on-logon (per-user). --minimized starts tray-only at boot so the

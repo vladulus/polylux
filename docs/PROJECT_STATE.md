@@ -2190,3 +2190,90 @@ Polylux's "disable, don't uninstall" approach gives the same
 operational result (AC stays down forever, drivers / sensors are
 still callable by other apps if needed) at zero risk and with a
 trivial revert path (Set-Service back to Automatic in services.msc).
+
+### 18.8 v0.5 — installer second-pass fixes (2026-05-17, same day)
+
+Three issues from Vlad's first manual test of the §18.7 build:
+"a aparut in tray si dupa a disparut.... iatr in programs in start nu il
+gaseste".
+
+#### 18.8.1 Tray icon "appeared then disappeared"
+
+Root cause: PyInstaller `console=True` opens a black console window
+alongside the Qt app. Vlad (reasonably) closed it thinking it was a
+stale launcher window. Closing the console killed Polylux. Tray icon
+disappeared because the owning process was gone.
+
+Fix two-part:
+
+  - **`polylux/service/main.py`** new `_configure_logging()` adds a
+    `RotatingFileHandler` (5 × 2 MB) writing to
+    `%APPDATA%\Polylux\polylux.log` in addition to stderr. Logs
+    survive even when no console is attached (the frozen case).
+  - **`installer/polylux.spec`** flips `console=True` → `False`.
+    No more black window, no more "user closes the console" footgun.
+    All output goes to the log file.
+
+#### 18.8.2 "Can't find Polylux in Start menu"
+
+Root cause: §18.7's `[Icons]` used `{group}` which nests the
+shortcut at `Start Menu\Programs\Polylux\Polylux.lnk`. Windows 11's
+Start menu does surface this under "All apps → P → Polylux folder
+→ Polylux", but it's two clicks deep and Start search is sometimes
+slow to index nested folders.
+
+Fix: switch to `{autoprograms}` so the shortcut lands directly at
+`Start Menu\Programs\Polylux.lnk` — one click, instant Start
+search match. `Uninstall Polylux.lnk` sits alongside it. The
+`desktopicon` task is now **default checked** (was `Flags:
+unchecked`) so end users get a desktop icon out of the box. The
+prior-install [Code] uninstall step cleans up the legacy nested
+folder from older installs.
+
+#### 18.8.3 ASUS service respawn limit (documented)
+
+Surprise behavior: after `neutralize-asus.cmd` sets
+`AsusCertService` to Disabled, the service comes back as
+`Automatic + Running` within seconds, even though no triggers are
+registered (`sc qtriggerinfo AsusCertService` returns "no triggers")
+and Polylux's runtime `kill_asus_stack()` took an early-return
+path that doesn't touch the service config. Source unknown — likely
+an ASUS Update Agent or a TamperProtection-style watchdog inside
+AsusCertService itself.
+
+Operational impact: **none for v0.5**. Even with AsusCertService
+running, Polylux successfully claims chip 1A21 — verified end-to-end
+(`Chip1A21 opened`, Aura RGB connected). The actual blocker is
+`Aac3572MbHal_x86`, which stays dead via the `taskkill /F`
++ supervising-services-stopped combo. Other 3 services
+(ArmouryCrateService, AsusFanControlService, LightingService) stay
+Stopped + Disabled.
+
+Mitigation, also shipped: `polylux/service/kill_asus_stack.py` new
+`_services_not_already_disabled()` filter so the runtime "set to
+Manual" path never downgrades Disabled → Manual. The installer's
+Disabled state survives Polylux launches, even if ASUS's watchdog
+later restores AsusCertService specifically.
+
+If the respawn becomes a problem (Aac3572MbHal coming back as a
+child of AsusCertService), v0.6 mitigations: take ownership of
+`HKLM\SYSTEM\CurrentControlSet\Services\AsusCertService` and ACL
+its Start value to deny writes; or hook AsusCertService at runtime
+via a Windows service of our own that re-stops it on a 30 s timer.
+
+#### 18.8.4 End-to-end verification (2026-05-17 11:11)
+
+```
+[Polylux] Prior install detected; running unins000.exe (exit 0)
+neutralize-asus + register-service exits 0
+ls "Start Menu\Programs\":   Polylux.lnk, Uninstall Polylux.lnk
+ls "Public\Desktop\":         Polylux.lnk
+Polylux --minimized:          survives indefinitely, logs to polylux.log,
+                              tray icon active, no console window
+ArmouryCrateService:          Stopped, Disabled
+AsusFanControlService:        Stopped, Disabled
+LightingService:              Stopped, Disabled
+AsusCertService:              Running, Automatic   ← see §18.8.3
+Aac3572MbHal_x86.exe:         not running          ← the actually-relevant kill
+PolyluxSensorDaemon:          RUNNING
+```

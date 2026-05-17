@@ -110,6 +110,30 @@ def _services_running(names: Iterable[str]) -> list[str]:
     return [n.strip() for n in proc.stdout.splitlines() if n.strip()]
 
 
+def _services_not_already_disabled(names: Iterable[str]) -> list[str]:
+    """Return names of services that don't already have StartType=Disabled.
+
+    The installer's neutralize-asus.cmd sets these to Disabled at install
+    time. We don't want our runtime "set to Manual" step to silently
+    downgrade Disabled → Manual on every Polylux launch — that would let
+    the services come back up after a Windows trigger / Defender action.
+    """
+    names = list(names)
+    name_list = ",".join(names)
+    script = (
+        f"Get-Service -Name {name_list} -ErrorAction SilentlyContinue "
+        f"| Where-Object {{ $_.StartType -ne 'Disabled' }} "
+        f"| ForEach-Object {{ $_.Name }}"
+    )
+    proc = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Command", script],
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        return names  # be conservative on error
+    return [n.strip() for n in proc.stdout.splitlines() if n.strip()]
+
+
 def stop_services(names: Iterable[str] = ASUS_SERVICES,
                   set_manual: bool = True,
                   elevate_if_needed: bool = True) -> bool:
@@ -134,11 +158,16 @@ def stop_services(names: Iterable[str] = ASUS_SERVICES,
     name_list = ",".join(names)
     direct_script = f"Stop-Service -Name {name_list} -Force -ErrorAction Continue"
     if set_manual:
-        manual_lines = " ; ".join(
-            f"Set-Service {n} -StartupType Manual -ErrorAction SilentlyContinue"
-            for n in names
-        )
-        direct_script += f" ; {manual_lines}"
+        # Only set Manual on services that aren't already Disabled — the
+        # installer's neutralize-asus.cmd locks them to Disabled and we
+        # don't want this runtime path to downgrade that.
+        to_manual = _services_not_already_disabled(names)
+        if to_manual:
+            manual_lines = " ; ".join(
+                f"Set-Service {n} -StartupType Manual -ErrorAction SilentlyContinue"
+                for n in to_manual
+            )
+            direct_script += f" ; {manual_lines}"
 
     proc = subprocess.run(
         ["powershell.exe", "-NoProfile", "-Command", direct_script],
