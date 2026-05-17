@@ -118,6 +118,17 @@ class Skin:
             color: white;
             background-color: {c.get('err', '#ef5350')};
         }}
+        #titlebar QPushButton#bmc_btn {{
+            color: {c.get('accent', '#C15F3C')};
+            border: 1px solid {c.get('accent', '#C15F3C')};
+            border-radius: 4px;
+            padding: 3px 12px;
+            font-weight: bold;
+        }}
+        #titlebar QPushButton#bmc_btn:hover {{
+            color: white;
+            background-color: {c.get('accent', '#C15F3C')};
+        }}
         QGroupBox {{
             background-color: {c.get('surface', '#2a2a2a')};
             border: 1px solid {c.get('border', '#3a3a3a')};

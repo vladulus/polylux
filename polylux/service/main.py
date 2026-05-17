@@ -14,6 +14,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import logging
 import logging.handlers
 import os
@@ -21,6 +22,7 @@ import signal
 import sys
 import threading
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -110,14 +112,19 @@ def run_matrix(chip, state: ServiceState, stop: threading.Event) -> None:
                         now, color=scaled_clock_color, rotation=mcfg.rotation,
                     )
                 else:
-                    frame.draw_text(
+                    # Clock uses bitmap fonts defined per-pixel for the
+                    # 7-row matrix — no TTF scaling, no anti-alias,
+                    # what you see is what you light up.
+                    from polylux.drivers.anime_matrix import clock_fonts
+                    bmp = clock_fonts.get(mcfg.clock_font_family)
+                    frame.draw_bitmap_text(
                         now,
+                        bmp_font=bmp,
                         color=scaled_clock_color,
                         rotation=mcfg.rotation,
-                        font=_matrix_font(mcfg.clock_font_size),
                     )
             elif mcfg.scene == "text":
-                font = _matrix_font(mcfg.text_font_size)
+                font = _matrix_font(mcfg.text_font_size, family=mcfg.text_font_family)
                 if (mcfg.text != last_text or mcfg.color != last_text_color
                         or mcfg.rotation != last_text_rotation
                         or mcfg.text_font_size != last_text_font_size):
@@ -156,12 +163,26 @@ def run_matrix(chip, state: ServiceState, stop: threading.Event) -> None:
                         img_frame_idx = 0
                         img_frame_tick = 0
                         img_scroll_offset_f = 0.0
-                        # Measure first frame for scroll decision
-                        long_axis = lut.MAX_ROW if mcfg.rotation in (90, 270) else lut.MAX_COL
+                        # Scroll decision: scale the image to fill the
+                        # matrix's LONG axis preserving aspect. If the
+                        # other axis then overflows the matrix's short
+                        # axis, scroll — otherwise the image fits.
+                        # Old logic fit to the short axis, which made
+                        # portrait images on the (portrait) Z690 Extreme
+                        # matrix come out tiny and never scroll. New
+                        # logic mirrors "fill the display, pan if
+                        # needed", which is what users expect.
+                        matrix_long = max(lut.MAX_COL, lut.MAX_ROW)
+                        matrix_short = min(lut.MAX_COL, lut.MAX_ROW)
                         aspect = img_pil.width / max(img_pil.height, 1)
-                        scaled_w = max(1, int(round(aspect * lut.MAX_COL)))
-                        img_fits = scaled_w <= long_axis
-                        img_seg_w = max(1, scaled_w + 4)
+                        if aspect >= 1.0:  # landscape image
+                            scaled_long = matrix_long
+                            scaled_short = max(1, int(round(matrix_long / aspect)))
+                        else:               # portrait image
+                            scaled_long = matrix_long
+                            scaled_short = max(1, int(round(matrix_long * aspect)))
+                        img_fits = scaled_short <= matrix_short
+                        img_seg_w = max(1, scaled_long + 4)
 
                     if img_pil is not None:
                         if img_n_frames > 1:
@@ -526,6 +547,31 @@ def _configure_logging(level: str) -> None:
         # Don't let logging setup take the whole app down — fall back
         # to console-only and surface the problem.
         log.warning("file logging unavailable: %s", ex)
+
+    # Crash diagnostics ----------------------------------------------------
+    # `faulthandler` writes a Python traceback to disk when the process
+    # receives a fatal signal (SIGSEGV / SIGABRT) — invaluable for the
+    # silent "Polylux just vanished" crashes that frozen PyQt apps can hit
+    # when something in native code goes sideways.
+    try:
+        crash_path = _log_dir() / "polylux.crash.log"
+        crash_file = open(crash_path, "a", encoding="utf-8", buffering=1)
+        faulthandler.enable(file=crash_file, all_threads=True)
+        log.info("crash log: %s", crash_path)
+    except Exception as ex:
+        log.warning("faulthandler setup failed: %s", ex)
+
+    # Python-level uncaught exceptions (Qt slots / threads) — without
+    # this hook they're swallowed silently and the process keeps
+    # running in a broken state, or worse, propagates into Qt's C++
+    # which abort()s the process.
+    def _excepthook(exc_type, exc, tb):
+        msg = "".join(traceback.format_exception(exc_type, exc, tb))
+        log.error("UNCAUGHT EXCEPTION:\n%s", msg)
+    sys.excepthook = _excepthook
+    threading.excepthook = lambda args: _excepthook(
+        args.exc_type, args.exc_value, args.exc_traceback
+    )
 
 
 def main() -> int:

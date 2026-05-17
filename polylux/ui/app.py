@@ -21,6 +21,30 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction, QIcon, QPainter, QPixmap, QColor, QFont, QFontDatabase
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 
+_FONT_DIR = Path(__file__).resolve().parent / "fonts"
+
+
+def _register_bundled_fonts() -> list[str]:
+    """Load every .ttf/.otf in polylux/ui/fonts/ into the Qt font db.
+
+    Returns the family names Qt registered so callers can verify the
+    asset reached the renderer (PyInstaller-frozen builds occasionally
+    miss the data file if the spec wasn't refreshed)."""
+    if not _FONT_DIR.is_dir():
+        return []
+    families: list[str] = []
+    for path in sorted(_FONT_DIR.glob("*")):
+        if path.suffix.lower() not in (".ttf", ".otf"):
+            continue
+        font_id = QFontDatabase.addApplicationFont(str(path))
+        if font_id < 0:
+            log.warning("font: failed to register %s", path.name)
+            continue
+        for fam in QFontDatabase.applicationFontFamilies(font_id):
+            families.append(fam)
+            log.info("font registered: %s (from %s)", fam, path.name)
+    return families
+
 from polylux.ui.main_window import MainWindow
 from polylux.ui.skin import load_skin
 from polylux.ui.state import ServiceState, build_state
@@ -68,6 +92,18 @@ class PolyluxApp:
         self._start_minimized = start_minimized
         self._app = QApplication.instance() or QApplication(sys.argv)
         self._app.setQuitOnLastWindowClosed(False)
+        # Bundled fonts (Asus ROG, etc.) must register before any widget
+        # constructs its QFonts — otherwise Qt falls back to the next
+        # name in the skin's family list silently.
+        _register_bundled_fonts()
+        # Log every "about to quit" so we can root-cause unexpected
+        # shutdowns: aboutToQuit fires on app.quit(), SIGTERM/SIGINT,
+        # session logout, or sometimes when Qt itself decides to exit
+        # despite quitOnLastWindowClosed=False. Without this hook,
+        # silent exits leave no trace in polylux.log.
+        self._app.aboutToQuit.connect(
+            lambda: log.warning("QApplication.aboutToQuit fired — Polylux shutting down")
+        )
         # Set a sane application-wide default font so widgets without
         # explicit font-size in QSS don't inherit point-size -1.
         default_font = QFont(self._skin.font_family("body"), self._skin.font_size("body"))
@@ -80,7 +116,7 @@ class PolyluxApp:
             self._show_window()
         elif self._tray.supportsMessages():
             self._tray.showMessage(
-                "Polylux",
+                "Claude's Polylux",
                 "Running in tray. Click the icon to open.",
                 QSystemTrayIcon.MessageIcon.Information,
                 3000,

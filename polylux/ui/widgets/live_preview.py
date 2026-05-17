@@ -41,7 +41,8 @@ class MatrixLivePreview(_BaseLivePreview):
 
     def paintEvent(self, _ev) -> None:
         p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        # Square LEDs render crisper without antialiasing.
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         p.fillRect(self.rect(), QColor("#000"))
 
         try:
@@ -85,7 +86,8 @@ class MatrixLivePreview(_BaseLivePreview):
                     p.setBrush(QColor(r, g, b))
             else:
                 p.setBrush(QColor(28, 28, 28))
-            p.drawEllipse(x, y, dot, dot)
+            # Physical LEDs are square — square preview is more honest.
+            p.drawRect(x, y, dot, dot)
         p.end()
 
 

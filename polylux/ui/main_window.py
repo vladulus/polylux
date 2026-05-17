@@ -9,7 +9,7 @@ import logging
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QPoint
-from PyQt6.QtGui import QMouseEvent
+from PyQt6.QtGui import QCloseEvent, QMouseEvent
 from PyQt6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QMainWindow, QPushButton, QStackedWidget,
     QVBoxLayout, QWidget,
@@ -41,12 +41,22 @@ class MainWindow(QMainWindow):
         self._skin = skin
         self._drag_pos: Optional[QPoint] = None
 
+        # Belt-and-suspenders so Polylux never quits because the user
+        # closed the window. closeEvent below already calls hide() +
+        # ignore(), but Qt has historically had edge cases (modal
+        # dialogs being destroyed, taskbar close, ALT+F4 on hidden
+        # window) where the widget can still be destroyed despite
+        # ignore(), and once *that* fires Qt counts it as the "last
+        # window closed" — together with QApplication.quitOnLastWindow=
+        # False this prevents either path from taking the app down.
+        self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
+
         flags = Qt.WindowType.Window
         if skin.frameless:
             flags |= Qt.WindowType.FramelessWindowHint
         self.setWindowFlags(flags)
         self.setFixedSize(skin.width, skin.height)
-        self.setWindowTitle("Polylux")
+        self.setWindowTitle("Claude's Polylux")
 
         root = QWidget(self)
         root.setObjectName("root")
@@ -108,9 +118,19 @@ class MainWindow(QMainWindow):
         h.setContentsMargins(12, 0, 12, 0)
         h.setSpacing(8)
 
-        title = QLabel("POLYLUX")
+        title = QLabel("CLAUDE'S POLYLUX")
         title.setObjectName("title_label")
         h.addWidget(title, 1)
+
+        # Support / donate link — sits to the right of the title,
+        # before the window controls, visible but not pushy. Revolut.me
+        # for UK-friendly zero-fee instant transfers.
+        bmc_btn = QPushButton("♥  SUPPORT")
+        bmc_btn.setObjectName("bmc_btn")
+        bmc_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        bmc_btn.setToolTip("Open revolut.me/vladrev76 in your browser")
+        bmc_btn.clicked.connect(self._open_support_page)
+        h.addWidget(bmc_btn)
 
         min_btn = QPushButton("—")
         min_btn.setObjectName("min_btn")
@@ -124,6 +144,15 @@ class MainWindow(QMainWindow):
         close_btn.clicked.connect(self.hide)
         h.addWidget(close_btn)
         return bar
+
+    def _open_support_page(self) -> None:
+        # Best-effort — failure to open the browser is harmless, the
+        # button just does nothing.
+        try:
+            import webbrowser
+            webbrowser.open("https://revolut.me/vladrev76")
+        except Exception:
+            log.warning("could not open support page", exc_info=True)
 
     def _on_nav_changed(self, key: str) -> None:
         keys = [k for k, _ in NAV_ITEMS]
@@ -146,3 +175,19 @@ class MainWindow(QMainWindow):
 
     def mouseReleaseEvent(self, e: QMouseEvent) -> None:
         self._drag_pos = None
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Hide instead of destroying.
+
+        Without this override, an Alt+F4 / taskbar 'Close window' /
+        any system-level close request destroys the QMainWindow. Once
+        it's destroyed, there are no top-level windows left except the
+        QSystemTrayIcon — and Qt then quits the whole application
+        regardless of setQuitOnLastWindowClosed(False). The result was
+        Polylux silently exiting at random whenever the user closed
+        the main window. Ignoring the event + calling hide() keeps the
+        tray icon alive and the app running; the user can re-open the
+        window from the tray any time.
+        """
+        event.ignore()
+        self.hide()

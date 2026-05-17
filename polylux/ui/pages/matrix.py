@@ -4,8 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
-    QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
+    QPushButton, QVBoxLayout, QWidget,
 )
 
 from polylux.ui.pages.base import DevicePage
@@ -43,13 +43,21 @@ class MatrixPage(DevicePage):
             v.addWidget(QLabel("COLOR"))
             v.addWidget(pick)
 
-            size = SliderRow(label="FONT SIZE", minimum=5, maximum=16,
-                             value=cfg.clock_font_size, fmt="{v}px")
-            size.value_changed.connect(
-                lambda val: self._state.update_device("matrix", {"clock_font_size": val})
+            # Clock uses bitmap fonts purpose-built for the 7-row
+            # matrix. Each font has a fixed pixel height — no size
+            # slider needed; pick the font and it just fits.
+            from polylux.drivers.anime_matrix import clock_fonts
+            clock_fams = clock_fonts.names()
+            v.addWidget(QLabel("FONT"))
+            clock_font_cb = QComboBox()
+            clock_font_cb.addItems(clock_fams)
+            if cfg.clock_font_family in clock_fams:
+                clock_font_cb.setCurrentText(cfg.clock_font_family)
+            clock_font_cb.currentTextChanged.connect(
+                lambda fam: self._state.update_device("matrix", {"clock_font_family": fam})
             )
-            v.addWidget(size)
-            hint = QLabel("5 = native 3×5 pixel font, 6+ = Arial Bold")
+            v.addWidget(clock_font_cb)
+            hint = QLabel("Pixel-perfect bitmap fonts · 1 LED = 1 pixel")
             hint.setObjectName("dim")
             v.addWidget(hint)
         elif scene == "text":
@@ -74,6 +82,22 @@ class MatrixPage(DevicePage):
                 lambda val: self._state.update_device("matrix", {"text_font_size": val})
             )
             v.addWidget(size)
+
+            # Font family — populated from the matrix renderer's
+            # available_matrix_fonts(), which filters to fonts whose
+            # file is actually present on disk (so we don't offer
+            # families that would silently fall back).
+            from polylux.drivers.anime_matrix.render import available_matrix_fonts
+            fams = available_matrix_fonts() or ["Asus Rog", "Arial Bold", "Arial"]
+            v.addWidget(QLabel("FONT FAMILY"))
+            font_cb = QComboBox()
+            font_cb.addItems(fams)
+            if cfg.text_font_family in fams:
+                font_cb.setCurrentText(cfg.text_font_family)
+            font_cb.currentTextChanged.connect(
+                lambda fam: self._state.update_device("matrix", {"text_font_family": fam})
+            )
+            v.addWidget(font_cb)
 
             spd = SliderRow(label="SCROLL SPEED", minimum=1, maximum=100,
                             value=cfg.scroll_speed, fmt="{v}")

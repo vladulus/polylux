@@ -32,7 +32,7 @@
   },
 
   "fonts": {
-    "header": ["JetBrains Mono", "Consolas", "monospace"],
+    "header": ["Asus Rog", "JetBrains Mono", "Consolas", "monospace"],
     "body":   ["Inter", "Segoe UI", "sans-serif"],
     "header_size_px": 18,
     "body_size_px": 13,

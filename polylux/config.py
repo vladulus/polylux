@@ -108,7 +108,14 @@ class MatrixConfig:
     brightness: int = 100           # 0-100, applied at frame-build time
     scroll_speed: int = 55          # used in text + image scenes, px-per-frame analog
     text_font_size: int = 11        # PIL font px-size for scene=text
-    clock_font_size: int = 5        # 5 = native 3×5 pixel font; 6+ = PIL Arial Bold at that px size
+    text_font_family: str = "Asus Rog"  # font family for scene=text
+    # Clock-specific bitmap font. Each entry in
+    # ``polylux.drivers.anime_matrix.clock_fonts.CLOCK_FONTS`` defines
+    # its own pixel-fixed height, so there's no size slider for clock
+    # — pick a font and what you see is what lights up.
+    # ``clock_font_size`` is kept for yaml backward-compat but unused.
+    clock_font_size: int = 9
+    clock_font_family: str = "Bold 7"
     image_path: str = ""            # used when scene=image; PNG/JPG/GIF via PIL
     image_scroll: bool = True       # if image wider than long axis, scroll horizontally
 
@@ -125,8 +132,8 @@ class MatrixConfig:
             raise ValueError(f"matrix.scroll_speed must be 1..100, got {self.scroll_speed}")
         if not 7 <= self.text_font_size <= 16:
             raise ValueError(f"matrix.text_font_size must be 7..16, got {self.text_font_size}")
-        if not 5 <= self.clock_font_size <= 16:
-            raise ValueError(f"matrix.clock_font_size must be 5..16, got {self.clock_font_size}")
+        if not 7 <= self.clock_font_size <= 16:
+            raise ValueError(f"matrix.clock_font_size must be 7..16, got {self.clock_font_size}")
 
 
 @dataclass
@@ -231,6 +238,7 @@ class FanConfig:
     name: str = ""                    # user label, e.g. "CPU FAN"
     mode: str = "auto"                # auto / off / silent / medium / full / curve
     temp_source: str = "cpu package"  # which key from sensor_daemon.temps() drives the curve
+    max_rpm: int = 0                  # measured during one-shot calibration; gauge scale
     # 4 anchor points (temp_c, duty_pct). Linear interp between, clamped
     # to first/last duty outside the range. Used when mode="curve".
     curve: tuple[tuple[float, float], ...] = (
@@ -334,7 +342,13 @@ def load(path: str | Path = DEFAULT_CONFIG_PATH) -> PolyluxConfig:
     cfg.matrix.brightness = int(m.get("brightness", cfg.matrix.brightness))
     cfg.matrix.scroll_speed = int(m.get("scroll_speed", cfg.matrix.scroll_speed))
     cfg.matrix.text_font_size = int(m.get("text_font_size", cfg.matrix.text_font_size))
-    cfg.matrix.clock_font_size = int(m.get("clock_font_size", cfg.matrix.clock_font_size))
+    cfg.matrix.text_font_family = str(m.get("text_font_family", cfg.matrix.text_font_family))
+    cfg.matrix.clock_font_family = str(m.get("clock_font_family", cfg.matrix.clock_font_family))
+    # Clamp legacy clock_font_size=5 (the old "native 3×5 pixel font"
+    # value) into the new TTF range so existing yamls don't fail load.
+    cfg.matrix.clock_font_size = max(
+        7, int(m.get("clock_font_size", cfg.matrix.clock_font_size))
+    )
     cfg.matrix.image_path = str(m.get("image_path", cfg.matrix.image_path))
     cfg.matrix.image_scroll = bool(m.get("image_scroll", cfg.matrix.image_scroll))
     if "clock_color" in m:
@@ -388,6 +402,7 @@ def load(path: str | Path = DEFAULT_CONFIG_PATH) -> PolyluxConfig:
             fan.name = str(entry.get("name", fan.sensor_id))
             fan.mode = str(entry.get("mode", fan.mode))
             fan.temp_source = str(entry.get("temp_source", fan.temp_source))
+            fan.max_rpm = int(entry.get("max_rpm", fan.max_rpm) or 0)
             curve_raw = entry.get("curve")
             if isinstance(curve_raw, list) and curve_raw:
                 pts = []
