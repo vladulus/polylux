@@ -1,10 +1,10 @@
 # Next session — pick up here
 
-> Read `PROJECT_STATE.md` **§17 first** — 2026-05-17 the v0.5 sensor
-> daemon landed (custom C# / .NET 8 LHM-lib wrapper, single-file 36 MB
-> exe, Windows service, supersedes the v0.4 LHM-as-scheduled-task path).
-> Then read §2 + §2b for the working agreement, then §16 for v0.4 ship
-> recap.
+> Read `PROJECT_STATE.md` **§18 first** — 2026-05-17 the v0.5 Windows
+> installer landed (PyInstaller + Inno Setup, 77 MB single-exe, full
+> end-to-end verified on Z690 Extreme). §17 (same day) shipped the
+> headless sensor daemon. Then read §2 + §2b for the working agreement,
+> then §16 for v0.4 ship recap.
 
 ## TL;DR — what works as of v0.4 (2026-05-14)
 
@@ -51,22 +51,17 @@ Ordered by impact for v0.5 public launch.
    the Windows service and verify live sensors. Until then the
    subprocess fallback runs (dev mode).
 
-2. **Installer (.msi or NSIS / Inno Setup)** — now the top remaining
-   v0.5 item. Currently install is "clone repo + run service +
-   PowerShell scripts". For public launch:
-   - Bundle: Python embedded distribution, all wheels, tools/,
-     polylux.yaml default, the pre-built sensor-daemon exe so end
-     users never need a .NET SDK
-   - Install location: `%PROGRAMFILES%\Polylux\`
-   - Registers `PolyluxSensorDaemon` Windows service (auto-start at
-     boot) — the §17 install logic, but baked into the installer
-   - Adds Polylux to Run-on-logon
-     (HKCU\Software\Microsoft\Windows\CurrentVersion\Run)
-   - Start menu shortcut + uninstaller (uninstall must also stop +
-     delete the sensor daemon service)
-   - One UAC for the whole install — never again afterward.
+2. **~~Installer~~ — DONE 2026-05-17 (§18).** PyInstaller + Inno
+   Setup. `installer/Polylux.iss` produces a 77 MB
+   `Polylux-Setup-0.5.0.exe`. One UAC. Auto-starts at boot. Bundles
+   sensor daemon + OpenRGB. Service install + uninstall fully wired.
+   Verified end-to-end on the Z690 Extreme. Remaining polish:
+   code-signing cert (SmartScreen), `console=False` after file
+   logger lands, clean `polylux.yaml.default` separated from dev
+   working copy — see §18.6.
 
-3. **OLED protocol research** (capture session with AC):
+3. **OLED protocol research** — now the top remaining v0.5 item.
+   Capture session with AC:
    - Switch OLED through all 6 factory presets while USBPcap captures
      → decode the per-preset selector opcode
    - Move AC's brightness slider while capturing → confirm or correct

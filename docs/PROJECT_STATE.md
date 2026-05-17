@@ -1932,3 +1932,153 @@ forever. Polylux itself runs un-elevated.
     new sensor type the daemon will fall through to invariant
     `ToString()`. Polylux only consumes Fan + Temperature today, so
     not load-bearing.
+
+### 18 v0.5 — Windows installer (2026-05-17)
+
+§17 landed the sensor daemon as a stand-alone binary; §18 packages
+Polylux itself plus the daemon plus OpenRGB into a single signed-ready
+Windows installer. End-state: a 77 MB `Polylux-Setup-0.5.0.exe` that
+runs one UAC prompt and leaves the user with an auto-starting,
+zero-tray, fully wired install.
+
+#### 18.1 Layout
+
+Two-stage build:
+
+  1. **PyInstaller** freezes the Python app
+     (`installer/polylux.spec`). Entry point
+     `polylux/service/__main__.py`, target dir
+     `installer/dist/Polylux/`. ~136 MB folder with the Python 3.14
+     runtime + Qt6 + every runtime dep.
+  2. **Inno Setup** wraps the frozen folder + sensor-daemon exe +
+     OpenRGB portable + helper .cmds into a single self-extracting
+     installer (`installer/Polylux.iss` → `installer/Output/`).
+
+Install destination:
+
+```
+C:\Program Files\Polylux\
+├── Polylux.exe                                   PyInstaller bootloader
+├── _internal\                                    Python + Qt + deps
+│   └── tools\
+│       ├── PolyluxSensorDaemon\publish\PolyluxSensorDaemon.exe
+│       └── OpenRGB\OpenRGB Windows 64-bit\OpenRGB.exe
+├── register-service.cmd                          [Run] helper
+├── unregister-service.cmd                        [UninstallRun] helper
+└── unins000.exe                                  Inno-generated uninstaller
+
+%APPDATA%\Polylux\polylux.yaml                    per-user config (seeded
+                                                  on first install, never
+                                                  overwritten on upgrade)
+```
+
+The `_internal\tools\` placement is deliberate: it mirrors the
+`tools/` path that `polylux.service.external` resolves in dev mode
+(`__file__.parent.parent.parent / "tools"`), so the same path
+discovery works both in the source tree and the frozen install.
+
+Run-on-logon registry key (per-user):
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Polylux =`
+`"C:\Program Files\Polylux\Polylux.exe" --config "%APPDATA%\Polylux\polylux.yaml"`
+
+#### 18.2 PyInstaller spec
+
+Notable bits beyond the defaults:
+
+  - `console=True` for v0.5 MVP. Keeps `polylux.service` stdout logs
+    visible. v0.6 polish: flip to `console=False` once a file-based
+    logger lands so Run-on-logon doesn't pop a black window at boot.
+  - Qt6 excludes (`QtWebEngineCore`, `QtMultimedia`, `Qt3D…`,
+    `QtCharts`, `QtQml`, `QtQuick…`, …) strip ~150 MB of unused
+    plugin DLLs.
+  - Dev-only excludes (`frida`, `cv2`, `pytest`, `pyinstaller`)
+    avoid bundling the dev toolchain into the installer.
+  - **libusb runtime metadata chain**: `chip_1a21` driver imports
+    `libusb`, which `__import__("pkg_about").about()`s at import
+    time, which `import build.util`s, which `importlib.metadata`s.
+    PyInstaller's static analysis misses the lot. Fix:
+    `collect_all('libusb')` for code + binaries, `copy_metadata` on
+    `libusb`, `pkg_about`, `py-utlx`, `packaging`, `build`,
+    `typing_extensions`, `charset-normalizer` so dist-info folders
+    are bundled.
+
+#### 18.3 Inno Setup script
+
+`installer/Polylux.iss` — Inno Setup 6 script with:
+
+  - `PrivilegesRequired=admin`: one UAC at install time. Required
+    because sensor daemon install needs `sc create`. Inno emits a
+    warning that HKCU + userappdata are touched in admin mode —
+    benign for single-user gaming rigs (the elevated user is
+    typically the same person installing); v0.6 should switch to
+    `PrivilegesRequiredOverridesAllowed=dialog` if we go multi-user.
+  - `Compression=lzma2/ultra64`: 280 MB raw → 77 MB compressed.
+  - `[Files]` copies `dist\Polylux\*` recursively + the sensor
+    daemon exe + OpenRGB tree + helper .cmds + a per-user default
+    `polylux.yaml` (`onlyifdoesntexist uninsneveruninstall`).
+  - `[Run]` invokes `register-service.cmd` with the new exe path as
+    arg. The .cmd kills any legacy LibreHardwareMonitor.exe, stops
+    + deletes any prior `PolyluxSensorDaemon` service (e.g. dev
+    install pointing at the source tree), recreates it pointing at
+    the freshly-installed path, sets failure recovery, starts it,
+    deletes the legacy `PolyluxLHM` scheduled task.
+  - `[Registry]` writes HKCU Run on the `autostart` task.
+  - `[UninstallRun]` calls `unregister-service.cmd` with a
+    `RunOnceId` so the service is stopped + deleted exactly once
+    regardless of how the user triggered the uninstall.
+
+#### 18.4 Build / install workflow
+
+```
+# dev
+.venv\Scripts\pyinstaller.exe installer\polylux.spec --noconfirm \
+    --distpath installer\dist --workpath installer\build
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\Polylux.iss
+
+# end user
+Polylux-Setup-0.5.0.exe                    # GUI wizard, one UAC
+# OR silent / unattended:
+Polylux-Setup-0.5.0.exe /SILENT /TASKS=autostart
+```
+
+Uninstall via Settings → Apps or `unins000.exe`. The .cmd helpers
+make sure the sensor-daemon service is cleanly torn down before the
+files disappear.
+
+#### 18.5 End-to-end verification (2026-05-17)
+
+Live test on Vlad's Z690 Extreme rig, after `/SILENT` install over a
+prior dev install:
+
+```
+config loaded from C:\Users\vlad\AppData\Roaming\Polylux\polylux.yaml
+killing ASUS stack (Aac3572MbHal + services)... killed asus_framework.exe
+sensor daemon: already running
+openrgb spawned pid=2908 (--server)
+Chip1A21 opened
+Polylux running headless. Ctrl-C to stop.
+aura_rgb: connected, 4 total devices, 1 controlled (ASUS ROG MAXIMUS Z690 EXTREME)
+```
+
+Path resolution, service install, autostart key, USB device claim,
+OpenRGB SDK connection — all green from a single installer run.
+Service `BINARY_PATH_NAME` correctly repointed from the dev path to
+`C:\Program Files\Polylux\_internal\tools\PolyluxSensorDaemon\publish\PolyluxSensorDaemon.exe`.
+
+#### 18.6 Known limits (v0.6+ polish)
+
+  - Installer .exe is unsigned → Windows SmartScreen will show a
+    "Microsoft Defender SmartScreen prevented an unrecognized app"
+    warning on first download. Needs a real code-signing cert
+    (~$100/year via DigiCert / Sectigo) to clear cleanly. Track in
+    v0.6.
+  - The bundled default `polylux.yaml` is currently a copy of the
+    dev tree's working yaml (with whatever toggles + test text
+    Vlad happens to have set). Ship a clean `installer/polylux.yaml.default`
+    for the release artifact and reference that from the .iss.
+  - `console=True` in the spec means a black console window flashes
+    open at boot. Switch to `console=False` once file-based logging
+    + an Event-Viewer-friendly logger handle land.
+  - Admin-mode install writing to HKCU: works for single-user rigs
+    (admin == user); pivot to per-user dialog for multi-user
+    deployments.
