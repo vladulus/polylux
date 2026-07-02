@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.5.1 — 2026-07-02
+
+### Fixed
+
+  - **Bold 7 clock font: digit "1" redrawn** — double-wide stem with a
+    top flag instead of the thin seriffed stroke; reads consistently
+    with the other Bold 7 digits on the 7-row matrix.
+  - **Dev UI no longer writes into the repo's bundled default config**
+    (`python -m polylux.ui.app` now resolves `%APPDATA%\Polylux\
+    polylux.yaml` like the frozen build, instead of persisting live
+    settings into the tracked `polylux.yaml` the installer seeds new
+    users from).
+
 ## v0.5 — 2026-05-17
 
 Ship-ready Windows installer + fan PWM control + clean-room sensor

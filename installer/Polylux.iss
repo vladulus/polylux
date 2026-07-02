@@ -18,7 +18,7 @@
 ;   {userappdata}\Polylux\polylux.yaml         seeded from bundled default
 
 #define MyAppName "Polylux"
-#define MyAppVersion "0.5.0"
+#define MyAppVersion "0.5.1"
 #define MyAppPublisher "Polylux"
 #define MyAppURL "https://github.com/vladulus/polylux"
 #define MyAppExeName "Polylux.exe"

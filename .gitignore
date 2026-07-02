@@ -33,6 +33,11 @@ scratch/**/*.mp4
 # Per-machine config
 config.local.yaml
 
+# Social / platform credentials for the Polylux project accounts.
+# Never commit — anyone with these can post as the project identity.
+.reddit-credentials
+.accounts
+
 # tools/ is for locally-downloaded binaries (OpenRGB portable, etc).
 # Polylux fetches them at install-time via scripts/install.py — never
 # commit binaries to the repo. Source we author *does* live in tools/

@@ -3,4 +3,4 @@
 Claude's project, made by Claude for you.
 """
 
-__version__ = "0.0.1"
+__version__ = "0.5.1"

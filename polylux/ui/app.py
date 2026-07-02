@@ -167,8 +167,8 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
                         datefmt="%H:%M:%S")
-    yaml_path = Path(__file__).resolve().parent.parent.parent / "polylux.yaml"
-    state = build_state(yaml_path)
+    from polylux.config import _default_config_path
+    state = build_state(_default_config_path())
     app = PolyluxApp(state=state)
     # Show window immediately in standalone mode (no service running)
     app._show_window()
