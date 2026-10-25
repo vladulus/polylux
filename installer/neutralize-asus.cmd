@@ -35,7 +35,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
    }"
 
 REM ---- 3. Disable known ASUS scheduled tasks that re-launch at logon. ----
-for %%T in ("ASUS\Armoury Crate Control Interface" "ASUS\ArmouryCrate" "ASUS\ASUS Live Update" "ASUS\AssistantTaskName" "ArmouryCrateUpdater") do (
+for %%T in ("ASUS\Armoury Crate Control Interface" "ASUS\ArmouryCrate" "ASUS\ASUS Live Update" "ASUS\AssistantTaskName" "ArmouryCrateUpdater" "ASUS\ArmourySocketServer") do (
     schtasks /Change /TN %%T /Disable >nul 2>&1
 )
 

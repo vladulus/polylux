@@ -20,7 +20,8 @@ foreach ($s in $services) {
 }
 
 foreach ($t in 'ASUS\Armoury Crate Control Interface', 'ASUS\ArmouryCrate',
-               'ASUS\ASUS Live Update', 'ASUS\AssistantTaskName', 'ArmouryCrateUpdater') {
+               'ASUS\ASUS Live Update', 'ASUS\AssistantTaskName', 'ArmouryCrateUpdater',
+               'ASUS\ArmourySocketServer') {   # starts asus_framework = AC's AIO fan loop
     schtasks /Change /TN $t /Disable 2>&1 | Out-Null
 }
 

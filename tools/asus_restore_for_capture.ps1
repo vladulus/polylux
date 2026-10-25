@@ -20,7 +20,8 @@ foreach ($s in $services) {
 }
 
 foreach ($t in 'ASUS\Armoury Crate Control Interface', 'ASUS\ArmouryCrate',
-               'ASUS\ASUS Live Update', 'ASUS\AssistantTaskName', 'ArmouryCrateUpdater') {
+               'ASUS\ASUS Live Update', 'ASUS\AssistantTaskName', 'ArmouryCrateUpdater',
+               'ASUS\ArmourySocketServer') {
     schtasks /Change /TN $t /Enable 2>&1 | Out-Null
 }
 

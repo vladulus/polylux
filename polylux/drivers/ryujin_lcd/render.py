@@ -46,7 +46,8 @@ def ryujin_image(path: str | Path, stretch: bool = False, portrait: bool = False
     def encode() -> bytes:
         buf = io.BytesIO()
         frames[0].save(buf, format="GIF", save_all=True, append_images=frames[1:],
-                       duration=durations, loop=0, optimize=True)
+                       duration=durations, loop=0, optimize=True,
+                       disposal=1)   # "keep previous frame", as in AC's GIF; 0 garbled the LCD
         return buf.getvalue()
 
     data = encode()
