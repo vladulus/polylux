@@ -485,7 +485,7 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
 
         # Hardware Monitor shows 0 until the host feeds the four slots.
         if rcfg.scene == "hardware_monitor" and time.monotonic() >= next_monitor_tick:
-            next_monitor_tick = time.monotonic() + 5.0
+            next_monitor_tick = time.monotonic() + 2.0
             try:
                 import psutil
                 t = temps.temps()
