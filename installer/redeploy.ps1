@@ -21,19 +21,22 @@ if (-not $NoBuild) {
     if ($LASTEXITCODE -ne 0) { throw "pyinstaller failed (exit $LASTEXITCODE)" }
 }
 
+# The elevated half runs from a file so robocopy's log survives a failure.
+$log = Join-Path $env:TEMP 'polylux-redeploy.log'
+$swapFile = Join-Path $env:TEMP 'polylux-redeploy-swap.ps1'
+@"
 # Config saves are debounced 2 s; wait that out after the window closes.
-$swap = @"
 Get-Process Polylux -ErrorAction SilentlyContinue | ForEach-Object { `$_.CloseMainWindow() | Out-Null }
 Start-Sleep 3
 Get-Process Polylux -ErrorAction SilentlyContinue | Stop-Process -Force
 # OpenRGB is Polylux's child but outlives it and locks _internal\tools\OpenRGB.
 Get-Process OpenRGB -ErrorAction SilentlyContinue | Where-Object { `$_.Path -like '$dst\*' } | Stop-Process -Force
-Start-Sleep 1
-robocopy "$src" "$dst" /E /XD "$src\_internal\tools\PolyluxSensorDaemon" /NFL /NDL /NJH /NJS /NP | Out-Null
+Get-Process Polylux, OpenRGB -ErrorAction SilentlyContinue | Wait-Process -Timeout 15 -ErrorAction SilentlyContinue
+robocopy "$src" "$dst" /E /R:3 /W:2 /XD "$src\_internal\tools\PolyluxSensorDaemon" /NP /NJH /LOG:"$log"
 exit [int](`$LASTEXITCODE -ge 8)
-"@
-$p = Start-Process powershell -Verb RunAs -Wait -PassThru -ArgumentList '-NoProfile', '-Command', $swap
-if ($p.ExitCode -ne 0) { throw "copy into $dst failed" }
+"@ | Set-Content -Encoding UTF8 $swapFile
+$p = Start-Process powershell -Verb RunAs -Wait -PassThru -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $swapFile
+if ($p.ExitCode -ne 0) { throw "copy into $dst failed, see $log" }
 
 Start-Process (Join-Path $dst 'Polylux.exe') -ArgumentList '--config', $cfg
 Write-Host "[OK] Polylux redeployed from $src" -ForegroundColor Green
