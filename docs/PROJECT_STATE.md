@@ -1831,9 +1831,10 @@ Plan: `docs/superpowers/plans/2026-05-13-tabbed-ui-redesign.md`.
     that exposes the same HTTP API but with no UI / no tray
     (~150 lines of C#).
 
-  - **OLED brightness opcode unverified** — `ec 51 14 <level>` is
-    speculative; need live test or USBPcap of AC's brightness slider
-    to confirm. UI hides brightness from OLED COMMON until verified.
+  - **OLED brightness** — AC 6.5.7 has no brightness setting for the OLED
+    (its OLED Settings dialog: working state on/off, sleep/soft-off on/off,
+    rotate 180°). `ec 5c 01 <s5> 00 00 00 <rot> 10` carries the last two
+    (`oled_brightness_USBPcap1.pcap`, 2026-10-25).
 
   - **OLED preset GIF index unselectable** — `ec 51 10` enters preset
     mode but the chip cycles all 6 factory animations internally.

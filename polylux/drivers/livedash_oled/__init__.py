@@ -22,4 +22,6 @@ from .driver import (  # noqa: F401
     LiveDashOLEDError,
     build_text_packet,
     build_image_prep_packets,
+    build_image_commit_packets,
+    build_settings_packet,
 )

@@ -23,7 +23,11 @@ Two operations are supported:
      HID ec 73 ff 00 00 00 00 00      end of send
      HID ec 51 10 01 01 00 00 00      switch to image mode
      HID ec dc 00 ...                 status query (reply ec 5c 00 01 .. 10)
-     HID ec 5c 01 01 00 00 00 00 10   activate
+     HID ec 5c 01 <s5> 00 00 00 <rot> 10   settings block (see below)
+
+`ec 5c` is the OLED Settings dialog, resent by AC after every change
+(oled_brightness_USBPcap1.pcap): b2 = on in sleep/hibernate/soft-off
+(01 on, 00 off), b6 = rotate 180° (01). There is no brightness setting.
 
 Usage::
 
@@ -87,15 +91,24 @@ def build_text_packet(label: str, value: str) -> bytes:
     return bytes(pkt)
 
 
-def build_image_commit_packets() -> tuple[bytes, ...]:
+def _pad(head: list[int]) -> bytes:
+    return bytes(head) + b"\x00" * (HID_PACKET_SIZE - len(head))
+
+
+def build_settings_packet(on_when_off: bool = False, rotate_180: bool = False) -> bytes:
+    """The ec 5c OLED settings block. Defaults keep the OLED dark with the PC off."""
+    return _pad([0xEC, 0x5C, 0x01, int(on_when_off), 0x00, 0x00, 0x00, int(rotate_180), 0x10])
+
+
+def build_image_commit_packets(on_when_off: bool = False,
+                               rotate_180: bool = False) -> tuple[bytes, ...]:
     """The 4 HID packets AC sends after the bulk transfer: end-of-send,
-    image mode, status query, activate."""
-    pad = lambda head: bytes(head) + b"\x00" * (HID_PACKET_SIZE - len(head))
+    image mode, status query, settings."""
     return (
-        pad([0xEC, 0x73, 0xFF]),
-        pad([0xEC, 0x51, 0x10, 0x01, 0x01]),
-        pad([0xEC, 0xDC]),
-        pad([0xEC, 0x5C, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x10]),
+        _pad([0xEC, 0x73, 0xFF]),
+        _pad([0xEC, 0x51, 0x10, 0x01, 0x01]),
+        _pad([0xEC, 0xDC]),
+        build_settings_packet(on_when_off, rotate_180),
     )
 
 
@@ -109,7 +122,7 @@ def build_image_prep_packets(image_size: int) -> tuple[bytes, bytes, bytes, byte
     p72 = bytes([0xEC, 0x72, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00]) + b"\x00" * 57
     p51 = bytes([0xEC, 0x51, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]) + b"\x00" * 57
     p73 = bytes([0xEC, 0x73, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]) + b"\x00" * 57
-    p7f = bytes([0xEC, 0x7F, 0x02, size_lo, size_hi, 0x00, 0x00, 0x00]) + b"\x00" * 57
+    p7f = bytes([0xEC, 0x7F, 0x02, *size, 0x00, 0x00]) + b"\x00" * 57
     return p72, p51, p73, p7f
 
 
