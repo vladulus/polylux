@@ -625,9 +625,9 @@ class FansPage(QWidget):
             outer.addWidget(self._ryujin_card)
         outer.addStretch(0)
 
-        # First-time discovery + maybe-calibrate
-        if not state.snapshot().fans.fans:
-            self._discover_and_seed()
+        # Discovery adds fans plugged in since the last run (it skips the
+        # ones already configured), then maybe-calibrate the new ones.
+        self._discover_and_seed()
         self._rebuild_cards()
         self._maybe_start_calibration()
 
