@@ -56,6 +56,13 @@ def interpolate_curve(curve: Iterable[tuple[float, float]], temp_c: float) -> fl
     return float(pts[-1][1])
 
 
+# Names offered in the Fans UI that LHM doesn't use. "motherboard" was never
+# a real LHM sensor, so every fan on it ran the silent fallback. On the
+# NCT6798D the board sensor is SYSTIN (AC labels it so), which LHM reports
+# as "Temperature #1".
+TEMP_ALIASES = {"motherboard": "temperature #1"}
+
+
 def resolve_duty(fan: FanConfig, temps: dict[str, float]) -> Optional[float]:
     """Translate the fan's mode + current temperature reading into a PWM%.
 
@@ -66,7 +73,8 @@ def resolve_duty(fan: FanConfig, temps: dict[str, float]) -> Optional[float]:
     if mode == "auto":
         return None
     if mode == "curve":
-        t = temps.get(fan.temp_source.lower())
+        src = fan.temp_source.lower()
+        t = temps.get(TEMP_ALIASES.get(src, src))
         if t is None:
             log.warning("fan %s: temp source %r not available, falling back to silent",
                         fan.name or fan.sensor_id, fan.temp_source)

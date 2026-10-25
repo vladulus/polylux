@@ -92,3 +92,12 @@ def test_handles_negative_temperatures():
     ])
     s = LHMSensors(_injected_tree=tree)
     assert s.temps()["outside"] == -5.0
+
+
+def test_motherboard_source_maps_to_systin():
+    """'motherboard' was offered in the UI but never existed in LHM."""
+    from polylux.config import FanConfig
+    from polylux.sensors.fan_control import resolve_duty
+    fan = FanConfig(sensor_id="/lpc/nct6798d/0/control/0", mode="curve",
+                    temp_source="motherboard", curve=((30.0, 0.0), (50.0, 100.0)))
+    assert resolve_duty(fan, {"temperature #1": 40.0}) == 50.0
