@@ -1945,8 +1945,21 @@ one-time install.
         CPU + GPU + Motherboard + Controller + Memory enabled, polls
         on a timer via `IVisitor`, builds the JSON tree on each tick.
       - `HttpServer.cs`: `HttpListener` bound to `127.0.0.1` only
-        (no URL ACL needed even as LocalSystem), serves `/data.json`
-        and `/health`.
+        (no URL ACL needed even as LocalSystem), serves `/data.json`,
+        `/health` and `POST /control/fan/<id>`
+        (`{"mode":"software","value":x}` / `{"mode":"default"}`).
+      - **Fan duty is enforced, not fire-and-forget.** LHM 0.9.6 only
+        writes the NCT6798D when the requested mode/value changes
+        (`Control.cs` setters) and `Nct677X.SetControl` silently drops a
+        write when the ISA-bus mutex is busy for 10 ms. It writes mode
+        reg x02 = 0 + command reg x09, but reports the output reg
+        (0x001/0x003/0x011/0x013). Each tick `EnforceRequestedControls()`
+        compares the output with the last software value and rewrites on
+        a >2 % mismatch, logging a Warning to the Application Event Log
+        (provider `PolyluxSensorDaemon`). On 2026-10-25 that log showed
+        another writer on the chip (RAD_FAN1 pulled from 100 % to
+        92…68 %, CHA_FAN1 held at 5.9 % against 8–11 %); not identified
+        yet.
   - **JSON wire format** matches LHM's Remote Web Server exactly
     (root `{id, Text, Children}` → PC → hardware → sensor-type groups
     → leaves with `{id, Text, Min, Value, Max, SensorId, Type,
