@@ -18,7 +18,9 @@ class _FakeChip:
     """Records what the matrix sends instead of touching USB."""
 
     def __init__(self):
+        import threading
         self.hid, self.bulk, self.inits = [], [], 0
+        self.lock = threading.RLock()
 
     def init_for_matrix(self):
         self.inits += 1

@@ -198,24 +198,25 @@ class LiveDashOLED:
                 f"image_bytes too large: {len(image_bytes)} > 100KB max"
             )
 
-        import time
-        size = len(image_bytes)
-        p72, p51, p73, p7f = build_image_prep_packets(size)
-        for pkt in (p72, p51, p73, p7f):
-            self.chip.hid_write(pkt)
-            time.sleep(0.3)
+        from polylux.drivers import ec_transfer as ec
 
-        # Pad to next 4KB boundary, send as one bulk transfer.
-        padded_len = ((size + OLED_BULK_CHUNK - 1) // OLED_BULK_CHUNK) * OLED_BULK_CHUNK
-        padded = image_bytes + b"\x00" * (padded_len - size)
-        n = self.chip.bulk_write(padded, timeout_ms=5000)
-        if n != padded_len:
-            raise LiveDashOLEDError(
-                f"OLED bulk write incomplete: {n}/{padded_len}"
-            )
-        for pkt in build_image_commit_packets(on_when_off, rotate_180):
-            time.sleep(0.3)
-            self.chip.hid_write(pkt)
+        chip = self.chip
+        cmd = lambda p: ec.command(chip.hid_write, chip.hid_read, p)
+        p72, p51, p73, p7f = build_image_prep_packets(len(image_bytes))
+        end, mode, status, settings = build_image_commit_packets(on_when_off, rotate_180)
+        with chip.lock:
+            ec.drain(chip.hid_read)
+            cmd(p72)
+            cmd(p51)
+            cmd(p73)
+            ec.wait_for(chip.hid_read, b"\xee\x13\x00\x01", 2.0)
+            cmd(p7f)
+            ec.bulk_upload(chip.bulk_write, chip.hid_read, image_bytes)
+            cmd(end)
+            ec.wait_for(chip.hid_read, b"\xee\x13\x00\xff", 3.0)
+            cmd(mode)
+            cmd(status)
+            cmd(settings)
         self._text_mode_armed = False
 
     def send_raw_hid(self, packet: bytes) -> None:

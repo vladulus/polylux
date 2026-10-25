@@ -140,31 +140,51 @@ class RyujinLCD:
             raise RyujinLCDError("LCD not open")
         return self._usb_dev.write(BULK_EP_OUT, data, timeout=timeout_ms)
 
+    def hid_read(self, timeout_ms: int) -> bytes:
+        """One HID input report (ec/ee reply), or b"" on timeout."""
+        if self._hid_dev is None:
+            raise RyujinLCDError("LCD not open")
+        return bytes(self._hid_dev.read(HID_PACKET_SIZE, timeout_ms))
+
+    def command(self, pkt: bytes, timeout: float = 1.0) -> bytes:
+        """Send one ec command and wait for its reply, like AC does."""
+        from polylux.drivers import ec_transfer
+        return ec_transfer.command(self.hid_write, self.hid_read, pkt, timeout)
+
     # --- public API ---
 
     def upload_image(self, image_bytes: bytes, settings: "RyujinSettings") -> None:
-        """Upload a 320x240 JPEG or GIF and show it (AC's Image mode)."""
-        for pkt, pause in build_upload_prep_packets(image_bytes):
-            self.hid_write(pkt)
-            time.sleep(pause)
-        padded_len = -(-len(image_bytes) // LCD_BULK_CHUNK) * LCD_BULK_CHUNK
-        padded = image_bytes + b"\x00" * (padded_len - len(image_bytes))
-        for offset in range(0, padded_len, LCD_BULK_CHUNK):
-            n = self.bulk_write(padded[offset:offset + LCD_BULK_CHUNK], timeout_ms=5000)
-            if n != LCD_BULK_CHUNK:
-                raise RyujinLCDError(f"bulk write incomplete at {offset}: {n}/{LCD_BULK_CHUNK}")
-        for pkt in (_pad([0xEC, 0x73, 0xFF]), settings.packet(), *MODE_IMAGE):
-            time.sleep(0.25)
-            self.hid_write(pkt)
+        """Upload a 320x240 JPEG or GIF and show it (AC's Image mode).
+
+        Every step waits for the device's reply (ec_transfer docstring);
+        the f1 reply comes back tagged ec 71.
+        """
+        from polylux.drivers import ec_transfer as ec
+
+        p71, pf1, p72, p73, p7f = (p for p, _ in build_upload_prep_packets(image_bytes))
+        ec.drain(self.hid_read)
+        self.command(p71)
+        self.hid_write(pf1)
+        ec.wait_for(self.hid_read, b"\xec\x71", 1.0)
+        self.command(p72)
+        self.command(p73)
+        ec.wait_for(self.hid_read, b"\xee\x13\x00\x01", 2.0)
+        self.command(p7f)
+        ec.bulk_upload(self.bulk_write, self.hid_read, image_bytes)
+        self.command(_pad([0xEC, 0x73, 0xFF]))
+        ec.wait_for(self.hid_read, b"\xee\x13\x00\xff", 3.0)
+        for pkt in (settings.packet(), *MODE_IMAGE):
+            self.command(pkt)
 
     def apply_settings(self, settings: "RyujinSettings") -> None:
-        self.hid_write(settings.packet())
+        from polylux.drivers import ec_transfer
+        ec_transfer.drain(self.hid_read)
+        self.command(settings.packet())
 
     def show_animation(self, index: int) -> None:
         """One of the three firmware animations (AC's Default Animation)."""
         for pkt in build_animation_packets(index):
-            self.hid_write(pkt)
-            time.sleep(0.15)
+            self.command(pkt)
 
 
 def _pad(head) -> bytes:

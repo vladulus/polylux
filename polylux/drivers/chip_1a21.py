@@ -25,6 +25,7 @@ shared form when you need both displays in the same process::
 from __future__ import annotations
 
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -81,6 +82,9 @@ class Chip1A21:
     # Reference count so that AniMeMatrix + LiveDashOLED can be opened
     # and closed independently without releasing the chip until both are done.
     _refcount: int = field(default=0)
+    # Matrix and OLED threads share the chip; an OLED upload holds this for
+    # its whole handshake so matrix frames (and their acks) can't interleave.
+    lock: threading.RLock = field(default_factory=threading.RLock)
 
     @classmethod
     def open(cls) -> "Chip1A21":
@@ -169,11 +173,18 @@ class Chip1A21:
                 raise ValueError(
                     f"HID packet too long: {len(packet)} > {HID_PACKET_SIZE}"
                 )
-        n = self._hid_dev.write(packet)
+        with self.lock:
+            n = self._hid_dev.write(packet)
         if n < 0:
             raise Chip1A21Error(
                 f"HID write failed (prefix={packet[:8].hex()}): {self._hid_dev.error()}"
             )
+
+    def hid_read(self, timeout_ms: int) -> bytes:
+        """One HID input report (ec/ee reply), or b"" on timeout."""
+        if self._hid_dev is None:
+            raise Chip1A21Error("chip not open")
+        return bytes(self._hid_dev.read(HID_PACKET_SIZE, timeout_ms))
 
     def bulk_write(self, data: bytes, timeout_ms: int = 5000) -> int:
         """Write bytes to iface 0 BULK OUT ep 0x01.
@@ -183,7 +194,8 @@ class Chip1A21:
         """
         if self._usb_dev is None:
             raise Chip1A21Error("chip not open")
-        return self._usb_dev.write(BULK_EP_OUT, data, timeout=timeout_ms)
+        with self.lock:
+            return self._usb_dev.write(BULK_EP_OUT, data, timeout=timeout_ms)
 
     # --- matrix initialization (called lazily by AniMeMatrix) ---
 

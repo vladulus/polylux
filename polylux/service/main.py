@@ -429,8 +429,21 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
     from polylux.drivers.ryujin_lcd.driver import RyujinSettings, _pad
     from polylux.drivers.ryujin_lcd.render import ryujin_image
 
+    from polylux.drivers.ryujin_lcd import RyujinLCD
+
     applied = None
     while not stop.is_set():
+        if lcd is None:
+            # The AIO re-enumerates when its firmware restarts; old handles
+            # then fail with "device is not connected" forever.
+            try:
+                lcd = RyujinLCD.open()
+                applied = None
+                log.info("ryujin: reopened")
+            except Exception as ex:
+                log.debug("ryujin reopen failed: %s", ex)
+                stop.wait(2.0)
+                continue
         rcfg = state.snapshot().ryujin_lcd
         settings = RyujinSettings(
             portrait=rcfg.portrait,
@@ -440,6 +453,7 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
         )
         key = (rcfg.scene, rcfg.image_path, rcfg.image_stretch, settings)
         if key != applied:
+            log.info("ryujin: apply scene=%s image=%s %s", rcfg.scene, rcfg.image_path, settings)
             try:
                 if rcfg.scene == "image" and rcfg.image_path:
                     lcd.upload_image(ryujin_image(rcfg.image_path, rcfg.image_stretch), settings)
@@ -448,7 +462,7 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
                     lcd.show_animation(rcfg.animation)
                 elif rcfg.scene == "hardware_monitor":
                     lcd.apply_settings(settings)
-                    lcd.hid_write(_pad([0xEC, 0x51, 0x21]))
+                    lcd.command(_pad([0xEC, 0x51, 0x21]))
                 else:  # off, or image without a file yet
                     lcd.apply_settings(settings)
                 applied = key
@@ -457,6 +471,9 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
             except Exception as ex:
                 state.mark_update("ryujin_lcd", error=str(ex))
                 log.warning("ryujin update failed: %s", ex)
+                if "not connected" in str(ex) or "No such device" in str(ex) or "reply within" in str(ex):
+                    lcd.close()
+                    lcd = None
         stop.wait(1.0)
 
 

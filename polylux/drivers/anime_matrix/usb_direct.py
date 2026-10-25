@@ -143,9 +143,10 @@ class AniMeMatrix:
         # First-frame init. Idempotent — only sends ec 42 01 once per chip
         # instance. Also: side-effect of suppressing OLED text writes
         # until chip power-cycle (see Chip1A21.init_for_matrix() docstring).
-        self.chip.init_for_matrix()
-        self.chip.hid_write(_HID_PREP_C1)
-        self.chip.hid_write(_HID_PREP_7F)
-        n = self.chip.bulk_write(bytes(buf))
+        with self.chip.lock:
+            self.chip.init_for_matrix()
+            self.chip.hid_write(_HID_PREP_C1)
+            self.chip.hid_write(_HID_PREP_7F)
+            n = self.chip.bulk_write(bytes(buf))
         if n != FRAME_SIZE:
             raise AniMeMatrixError(f"bulk write incomplete: {n}/{FRAME_SIZE}")
