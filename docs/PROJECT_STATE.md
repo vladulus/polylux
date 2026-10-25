@@ -730,6 +730,26 @@ Also checked: Windows Dynamic Lighting requires LampArray (usage page
 0x59). Aura uses vendor-specific 0xFF72, so Windows native lighting
 APIs don't recognize it. OpenRGB is the cleanest path.
 
+### 9.4.0 Shutdown Effect (S5 lighting) — decoded 2026-10-25
+
+`shutdown_effect_USBPcap1.pcap`, MB Aura controller (dev 5, HID
+SET_REPORT on ep 0). Vlad's actions: Aura Sync ON + Static, then
+Shutdown Effect → Off. AC refuses to edit Shutdown Effect while Aura Sync
+is "Dark"; the effect shown before was Rainbow.
+
+    Aura Sync ON/Static: ec 38 01 01, ec 38 00 01, ec 35 00 00 00 01 52 46,
+                         ec 36 00 ff 00 .., ec 3f 55, ec 35 01/36 01..04 ..,
+                         ec 35 00 00 01 05, ec 3f 55, then ec 40 direct
+                         frames (ff 00 00) once per second
+    Shutdown → Off:      ec 36 00 ff 01 00.. , ec 35 00 00 01 01, ec 3f 55
+
+[Probabil] `ec 35 <ch> 00 <slot> <mode>` with slot 01 = shutdown state,
+mode 05 = rainbow (the old shutdown effect), mode 01 = static; Off is
+static with an all-zero colour from `ec 36 00 ff 01`, and `ec 3f 55`
+saves to the controller. [Probabil] this is why the LEDs stayed lit with
+the PC off: Aura Sync was on Dark, so the Rainbow shutdown effect could
+never be changed. Not yet verified by a shutdown.
+
 ### 9.4.1 BIOS RGB toggle = hardware power cut (Vlad's verification 2026-05-12)
 
 Vlad's BIOS has the "Aura RGB" toggle Disabled by default (his preference
