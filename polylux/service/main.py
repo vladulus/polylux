@@ -454,6 +454,11 @@ def _monitor_values(temps, lcd):
     return value
 
 
+# The pump never goes below this, whatever the curve says: a stopped pump
+# stops cooling the CPU. AC's own Smart idle was ~35 %.
+PUMP_MIN_PCT = 30
+
+
 def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
     """Apply Ryujin scene + settings whenever they change (§9.3)."""
     from polylux.drivers.ryujin_lcd.driver import (
@@ -537,7 +542,13 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
             try:
                 temp = temps.temps().get(rcfg.aio_temp_source.lower())
                 aio = interpolate_curve(list(rcfg.aio_curve), temp) if temp is not None else 100.0
-                target = (rcfg.pump_pct, rcfg.embedded_fan_pct, round(aio))
+                pump = rcfg.pump_pct
+                if rcfg.pump_mode == "curve":
+                    pt = temps.temps().get(rcfg.pump_temp_source.lower())
+                    # no reading -> full speed; never below PUMP_MIN_PCT
+                    pump = interpolate_curve(list(rcfg.pump_curve), pt) if pt is not None else 100
+                pump = max(PUMP_MIN_PCT, min(100, round(pump)))
+                target = (pump, rcfg.embedded_fan_pct, round(aio))
                 # Sent every tick like AC: when the host stays quiet the
                 # pump-head fan went to ~4800 rpm on its own (2026-10-25).
                 lcd.set_fans(*target)

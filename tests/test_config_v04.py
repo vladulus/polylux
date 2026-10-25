@@ -155,3 +155,20 @@ def test_yaml_ryujin_monitor_slots(tmp_path: Path):
     cfg.validate()
     assert cfg.ryujin_lcd.monitor_slots[1] == ("VRM", "temperature #2")
     assert cfg.ryujin_lcd.monitor_slots[3] == ("Top fan", "rpm:fan #1")
+
+
+def test_ryujin_pump_curve_defaults_and_yaml(tmp_path: Path):
+    from polylux.config import RyujinLcdConfig
+    assert RyujinLcdConfig().pump_mode == "curve"
+    assert RyujinLcdConfig().pump_temp_source == "cpu package"
+    p = tmp_path / "polylux.yaml"
+    p.write_text(textwrap.dedent("""
+        ryujin_lcd:
+          pump_mode: fixed
+          pump_pct: 70
+          pump_curve: [[25, 40], [80, 100]]
+    """), encoding="utf-8")
+    cfg = load(p)
+    cfg.validate()
+    assert (cfg.ryujin_lcd.pump_mode, cfg.ryujin_lcd.pump_pct) == ("fixed", 70)
+    assert cfg.ryujin_lcd.pump_curve == ((25.0, 40.0), (80.0, 100.0))

@@ -193,7 +193,12 @@ class RyujinLcdConfig:
     # Fans (§9.3, ryujin_autotune capture). The firmware keeps the last
     # values it got; defaults = what it ran on 2026-10-25 after AC.
     fans_enabled: bool = True
-    pump_pct: int = 100              # ec 1a b3
+    pump_pct: int = 100              # ec 1a b3, used when pump_mode=fixed
+    pump_mode: str = "curve"         # curve | fixed
+    pump_temp_source: str = "cpu package"
+    # (°C, %) — AC's Smart ran the pump at ~35–43 % idle (autotune capture)
+    pump_curve: tuple[tuple[float, float], ...] = (
+        (30.0, 35.0), (50.0, 50.0), (70.0, 80.0), (85.0, 100.0))
     embedded_fan_pct: int = 30       # ec 1a b4 — the fan on the pump head, cools the VRMs
     aio_temp_source: str = "cpu package"
     aio_curve: tuple[tuple[float, float], ...] = (   # (°C, %) — AC's Smart default
@@ -220,6 +225,10 @@ class RyujinLcdConfig:
                 raise ValueError(f"ryujin_lcd.{name} must be 0..100")
         if len(self.aio_curve) < 2:
             raise ValueError("ryujin_lcd.aio_curve needs at least 2 points")
+        if self.pump_mode not in ("curve", "fixed"):
+            raise ValueError(f"ryujin_lcd.pump_mode must be curve|fixed, got {self.pump_mode!r}")
+        if len(self.pump_curve) < 2:
+            raise ValueError("ryujin_lcd.pump_curve needs at least 2 points")
 
 
 @dataclass
@@ -418,6 +427,10 @@ def load(path: str | Path = DEFAULT_CONFIG_PATH) -> PolyluxConfig:
     cfg.ryujin_lcd.aio_temp_source = str(r.get("aio_temp_source", cfg.ryujin_lcd.aio_temp_source))
     if isinstance(r.get("aio_curve"), list):
         cfg.ryujin_lcd.aio_curve = tuple((float(t), float(d)) for t, d in r["aio_curve"])
+    cfg.ryujin_lcd.pump_mode = str(r.get("pump_mode", cfg.ryujin_lcd.pump_mode))
+    cfg.ryujin_lcd.pump_temp_source = str(r.get("pump_temp_source", cfg.ryujin_lcd.pump_temp_source))
+    if isinstance(r.get("pump_curve"), list):
+        cfg.ryujin_lcd.pump_curve = tuple((float(t), float(d)) for t, d in r["pump_curve"])
     if isinstance(r.get("monitor_slots"), list) and len(r["monitor_slots"]) == 4:
         cfg.ryujin_lcd.monitor_slots = tuple((str(l), str(s)) for l, s in r["monitor_slots"])
 
