@@ -179,7 +179,8 @@ class LiveDashOLED:
         pkt = build_text_packet(label, value)
         self.chip.hid_write(pkt)
 
-    def upload_image(self, image_bytes: bytes) -> None:
+    def upload_image(self, image_bytes: bytes, on_when_off: bool = False,
+                     rotate_180: bool = False) -> None:
         """Upload a GIF animation to the OLED (256×64) and show it.
 
         Args:
@@ -212,7 +213,7 @@ class LiveDashOLED:
             raise LiveDashOLEDError(
                 f"OLED bulk write incomplete: {n}/{padded_len}"
             )
-        for pkt in build_image_commit_packets():
+        for pkt in build_image_commit_packets(on_when_off, rotate_180):
             time.sleep(0.3)
             self.chip.hid_write(pkt)
         self._text_mode_armed = False

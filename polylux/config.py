@@ -16,15 +16,14 @@ Scenes available:
     hardware_monitor — `label` / `value_source` (cpu_temp / gpu_temp /
                        cpu_pct / mem_pct / static)
     text             — `label` / `value` static text
-    qcode            — fall back to chip's Q-Code display (no data)
-    preset_gif       — factory-preloaded animation (shark / swimmer / etc)
+    image            — `image_path` (any image/GIF) uploaded as 256x64 GIF
     off              — chip in data-input mode, nothing displayed
 
   ryujin_lcd:
     hardware_monitor — chip's firmware-resident hw monitor (default state)
-    off              — chip's data-input mode
-    # NOTE: custom_image is blocked by ASUS firmware bug on Z690 Extreme.
-    # See PROJECT_STATE.md §9.2. Not exposed here until firmware fix.
+    image            — `image_path` uploaded as 320x240 JPEG / GIF
+    animation        — one of the 3 firmware animations (`animation`)
+    off              — display switched off
 
   aura_rgb:
     solid     — every detected device set to `color`
@@ -144,15 +143,16 @@ class OledConfig:
     value: str = ""                  # used when scene=text (static)
     value_source: str = "cpu_temp"   # used when scene=hardware_monitor (single mode)
     update_seconds: float = 2.0
-    preset_index: int = 0            # used when scene=preset_gif
-    brightness: int = 100
+    image_path: str = ""             # used when scene=image
+    rotate_180: bool = False
+    dark_when_off: bool = True       # OLED blank in sleep / soft-off
     font_size: str = "medium"        # small | medium | large
     hw_mode: str = "single"          # single | rotate
     rotate_sources: tuple[str, ...] = ("cpu_temp", "gpu_temp", "cpu_pct")
     rotate_interval_s: float = 3.0
     scroll_speed: int = 50           # 1..100, used when text scene value exceeds 16 chars
 
-    SCENES = ("hardware_monitor", "text", "preset_gif", "off")
+    SCENES = ("hardware_monitor", "text", "image", "off")
     VALUE_SOURCES = (
         "cpu_temp", "gpu_temp", "cpu_pct", "gpu_pct",
         "mem_pct", "fan_rpm", "static",
@@ -169,8 +169,6 @@ class OledConfig:
             raise ValueError(f"oled.font_size must be one of {self.FONT_SIZES}, got {self.font_size!r}")
         if self.hw_mode not in self.HW_MODES:
             raise ValueError(f"oled.hw_mode must be one of {self.HW_MODES}, got {self.hw_mode!r}")
-        if not 0 <= self.brightness <= 100:
-            raise ValueError(f"oled.brightness must be 0..100, got {self.brightness}")
         if not 0.5 <= self.rotate_interval_s <= 30.0:
             raise ValueError(f"oled.rotate_interval_s must be 0.5..30.0, got {self.rotate_interval_s}")
         if not 1 <= self.scroll_speed <= 100:
@@ -187,12 +185,19 @@ class OledConfig:
 class RyujinLcdConfig:
     enabled: bool = False
     scene: str = "hardware_monitor"
+    image_path: str = ""             # used when scene=image
+    image_stretch: bool = False      # scale without cropping
+    animation: int = 0               # 0..2, used when scene=animation
+    portrait: bool = True
+    dark_when_off: bool = True       # no standby screen with the PC off
 
-    SCENES = ("hardware_monitor", "off")
+    SCENES = ("hardware_monitor", "image", "animation", "off")
 
     def validate(self) -> None:
         if self.scene not in self.SCENES:
             raise ValueError(f"ryujin_lcd.scene must be one of {self.SCENES}, got {self.scene!r}")
+        if not 0 <= self.animation <= 2:
+            raise ValueError(f"ryujin_lcd.animation must be 0..2, got {self.animation}")
 
 
 @dataclass
@@ -298,6 +303,9 @@ class ServiceConfig:
     """Run `polylux.service.kill_asus_stack.kill_asus_stack()` at startup
     so Aac3572MbHal doesn't fight us for chip 1A21. Requires admin or
     UAC consent on first run for full effect (Stop-Service)."""
+    dark_when_off: bool = True
+    """Write the motherboard LED shutdown effect and the matrix S5 mode as
+    "off" at startup, so nothing stays lit with the PC off (§9.4.0)."""
 
 
 @dataclass
@@ -330,6 +338,7 @@ def load(path: str | Path = DEFAULT_CONFIG_PATH) -> PolyluxConfig:
     if "service" in raw:
         s = raw["service"] or {}
         cfg.service.kill_asus_stack = bool(s.get("kill_asus_stack", True))
+        cfg.service.dark_when_off = bool(s.get("dark_when_off", True))
 
     m = raw.get("matrix") or {}
     cfg.matrix.enabled = bool(m.get("enabled", False))
@@ -357,12 +366,15 @@ def load(path: str | Path = DEFAULT_CONFIG_PATH) -> PolyluxConfig:
     o = raw.get("oled") or {}
     cfg.oled.enabled = bool(o.get("enabled", False))
     cfg.oled.scene = str(o.get("scene", cfg.oled.scene))
+    if cfg.oled.scene == "preset_gif":   # pre-v0.6: chip-internal cycle, gone
+        cfg.oled.scene = "hardware_monitor"
     cfg.oled.label = str(o.get("label", cfg.oled.label))
     cfg.oled.value = str(o.get("value", cfg.oled.value))
     cfg.oled.value_source = str(o.get("value_source", cfg.oled.value_source))
     cfg.oled.update_seconds = float(o.get("update_seconds", cfg.oled.update_seconds))
-    cfg.oled.preset_index = int(o.get("preset_index", cfg.oled.preset_index))
-    cfg.oled.brightness = int(o.get("brightness", cfg.oled.brightness))
+    cfg.oled.image_path = str(o.get("image_path", cfg.oled.image_path))
+    cfg.oled.rotate_180 = bool(o.get("rotate_180", cfg.oled.rotate_180))
+    cfg.oled.dark_when_off = bool(o.get("dark_when_off", cfg.oled.dark_when_off))
     cfg.oled.font_size = str(o.get("font_size", cfg.oled.font_size))
     cfg.oled.hw_mode = str(o.get("hw_mode", cfg.oled.hw_mode))
     if "rotate_sources" in o and isinstance(o["rotate_sources"], list):
@@ -373,6 +385,11 @@ def load(path: str | Path = DEFAULT_CONFIG_PATH) -> PolyluxConfig:
     r = raw.get("ryujin_lcd") or {}
     cfg.ryujin_lcd.enabled = bool(r.get("enabled", False))
     cfg.ryujin_lcd.scene = str(r.get("scene", cfg.ryujin_lcd.scene))
+    cfg.ryujin_lcd.image_path = str(r.get("image_path", cfg.ryujin_lcd.image_path))
+    cfg.ryujin_lcd.image_stretch = bool(r.get("image_stretch", cfg.ryujin_lcd.image_stretch))
+    cfg.ryujin_lcd.animation = int(r.get("animation", cfg.ryujin_lcd.animation))
+    cfg.ryujin_lcd.portrait = bool(r.get("portrait", cfg.ryujin_lcd.portrait))
+    cfg.ryujin_lcd.dark_when_off = bool(r.get("dark_when_off", cfg.ryujin_lcd.dark_when_off))
 
     a = raw.get("aura_rgb") or {}
     cfg.aura_rgb.enabled = bool(a.get("enabled", False))

@@ -17,8 +17,9 @@ def test_matrix_scroll_speed_default():
     assert MatrixConfig().scroll_speed == 55
 
 
-def test_oled_brightness_default():
-    assert OledConfig().brightness == 100
+def test_oled_dark_when_off_default():
+    # AC has no OLED brightness; the S5 switch defaults to dark (§9.2)
+    assert OledConfig().dark_when_off is True
 
 
 def test_oled_font_size_default():
@@ -86,7 +87,6 @@ def test_yaml_load_with_new_fields(tmp_path: Path):
     assert cfg.oled.hw_mode == "rotate"
     assert cfg.oled.rotate_sources == ("cpu_temp", "gpu_temp")
     assert cfg.oled.rotate_interval_s == 2.5
-    assert cfg.oled.brightness == 80
     assert cfg.oled.font_size == "large"
     assert cfg.matrix.brightness == 50
     assert cfg.matrix.scroll_speed == 30
@@ -104,5 +104,38 @@ def test_yaml_load_old_format_still_works(tmp_path: Path):
     p = tmp_path / "polylux.yaml"
     p.write_text(yaml, encoding="utf-8")
     cfg = load(p)
-    assert cfg.oled.brightness == 100
+    assert cfg.oled.dark_when_off is True
     assert cfg.oled.hw_mode == "single"
+
+
+def test_yaml_preset_gif_falls_back(tmp_path: Path):
+    """preset_gif (chip-internal cycle) is gone; old configs must still load."""
+    p = tmp_path / "polylux.yaml"
+    p.write_text(textwrap.dedent("""
+        oled:
+          scene: preset_gif
+          preset_index: 2
+          brightness: 40
+    """), encoding="utf-8")
+    cfg = load(p)
+    cfg.validate()
+    assert cfg.oled.scene == "hardware_monitor"
+
+
+def test_yaml_ryujin_fields(tmp_path: Path):
+    p = tmp_path / "polylux.yaml"
+    p.write_text(textwrap.dedent("""
+        ryujin_lcd:
+          scene: animation
+          animation: 2
+          portrait: false
+        service:
+          dark_when_off: false
+    """), encoding="utf-8")
+    cfg = load(p)
+    cfg.validate()
+    assert (cfg.ryujin_lcd.scene, cfg.ryujin_lcd.animation, cfg.ryujin_lcd.portrait) == \
+        ("animation", 2, False)
+    assert cfg.ryujin_lcd.dark_when_off is True
+    assert cfg.service.dark_when_off is False
+

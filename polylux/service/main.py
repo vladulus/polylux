@@ -319,10 +319,11 @@ def run_oled(chip, state: ServiceState, stop: threading.Event) -> None:
     last_scroll_value = None
     scroll_idx = 0
 
-    # Brightness state — try the speculative `0xEC 0x14 <level>` opcode.
-    # If the chip doesn't honor it, the slider becomes a no-op (slider
-    # still moves in UI but display doesn't dim). See docs §9.2-ish.
-    last_brightness = None
+    from polylux.drivers.livedash_oled import build_settings_packet
+    from polylux.drivers.livedash_oled.render import oled_gif
+
+    last_settings = None
+    last_image = None
 
     while not stop.is_set():
         ocfg = state.snapshot().oled
@@ -330,15 +331,15 @@ def run_oled(chip, state: ServiceState, stop: threading.Event) -> None:
             one_shot_done = False
             oled._text_mode_armed = False
             last_scene = ocfg.scene
+            last_image = None
 
-        # Push brightness when it changes
-        if ocfg.brightness != last_brightness:
+        settings = (not ocfg.dark_when_off, ocfg.rotate_180)
+        if settings != last_settings:
             try:
-                level = max(0, min(255, int(ocfg.brightness * 2.55)))
-                chip.hid_write(bytes([0xEC, 0x14, level]) + b"\x00" * 62)
+                chip.hid_write(build_settings_packet(*settings))
+                last_settings = settings
             except Exception as ex:
-                log.debug("OLED brightness write failed: %s", ex)
-            last_brightness = ocfg.brightness
+                log.warning("OLED settings write failed: %s", ex)
 
         is_scrolling = False
         try:
@@ -375,10 +376,11 @@ def run_oled(chip, state: ServiceState, stop: threading.Event) -> None:
                 else:
                     oled.set_text(label, full_value)
                     state.set_frame("oled", ("text", label, full_value))
-            elif ocfg.scene == "preset_gif" and not one_shot_done:
-                chip.hid_write(bytes([0xEC, 0x51, 0x10]) + b"\x00" * 62)
-                state.set_frame("oled", ("preset_gif", ocfg.preset_index))
-                one_shot_done = True
+            elif ocfg.scene == "image" and ocfg.image_path and \
+                    (ocfg.image_path, settings) != last_image:
+                oled.upload_image(oled_gif(ocfg.image_path), *settings)
+                state.set_frame("oled", ("image", ocfg.image_path))
+                last_image = (ocfg.image_path, settings)
             elif ocfg.scene == "off" and not one_shot_done:
                 oled.set_text("", "")
                 chip.hid_write(bytes([0xEC, 0x51, 0x15]) + b"\x00" * 62)
@@ -420,6 +422,42 @@ def run_fans(state: ServiceState, stop: threading.Event) -> None:
             except Exception as ex:
                 log.warning("fan runner tick failed: %s", ex)
         stop.wait(max(0.5, fcfg.update_seconds))
+
+
+def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
+    """Apply Ryujin scene + settings whenever they change (§9.3)."""
+    from polylux.drivers.ryujin_lcd.driver import RyujinSettings, _pad
+    from polylux.drivers.ryujin_lcd.render import ryujin_image
+
+    applied = None
+    while not stop.is_set():
+        rcfg = state.snapshot().ryujin_lcd
+        settings = RyujinSettings(
+            portrait=rcfg.portrait,
+            display_on=rcfg.scene != "off",
+            animation=rcfg.animation,
+            standby=not rcfg.dark_when_off,
+        )
+        key = (rcfg.scene, rcfg.image_path, rcfg.image_stretch, settings)
+        if key != applied:
+            try:
+                if rcfg.scene == "image" and rcfg.image_path:
+                    lcd.upload_image(ryujin_image(rcfg.image_path, rcfg.image_stretch), settings)
+                elif rcfg.scene == "animation":
+                    lcd.apply_settings(settings)
+                    lcd.show_animation(rcfg.animation)
+                elif rcfg.scene == "hardware_monitor":
+                    lcd.apply_settings(settings)
+                    lcd.hid_write(_pad([0xEC, 0x51, 0x21]))
+                else:  # off, or image without a file yet
+                    lcd.apply_settings(settings)
+                applied = key
+                state.set_frame("ryujin_lcd", (rcfg.scene, rcfg.image_path))
+                state.mark_update("ryujin_lcd")
+            except Exception as ex:
+                state.mark_update("ryujin_lcd", error=str(ex))
+                log.warning("ryujin update failed: %s", ex)
+        stop.wait(1.0)
 
 
 def run_aura_rgb(state: ServiceState, stop: threading.Event) -> None:
@@ -617,16 +655,32 @@ def main() -> int:
 
     chip = None
     need_chip = cfg.matrix.enabled or cfg.oled.enabled
-    if need_chip:
+    if need_chip or cfg.service.dark_when_off:
         from polylux.drivers.chip_1a21 import Chip1A21
         try:
             chip = Chip1A21.open()
             log.info("Chip1A21 opened")
         except Exception as ex:
             log.error("Chip1A21 open failed: %s", ex)
-            return 1
+            if need_chip:
+                return 1
+
+    if cfg.service.dark_when_off:
+        from polylux.drivers import power_off_state
+        power_off_state.apply(chip)
 
     threads: list[threading.Thread] = []
+
+    if cfg.ryujin_lcd.enabled:
+        from polylux.drivers.ryujin_lcd import RyujinLCD
+        try:
+            lcd = RyujinLCD.open()
+            t = threading.Thread(target=run_ryujin, args=(lcd, state, _stop_event),
+                                 daemon=True, name="ryujin")
+            t.start()
+            threads.append(t)
+        except Exception as ex:
+            log.error("Ryujin LCD open failed: %s", ex)
 
     if cfg.oled.enabled and chip is not None:
         t = threading.Thread(target=run_oled, args=(chip, state, _stop_event),
@@ -654,9 +708,6 @@ def main() -> int:
                          daemon=True, name="fans")
     t.start()
     threads.append(t)
-
-    if cfg.ryujin_lcd.enabled and cfg.ryujin_lcd.scene == "hardware_monitor":
-        log.info("ryujin_lcd: firmware-default hw monitor active (no thread needed)")
 
     if not threads and args.headless:
         log.warning("no drivers enabled in headless mode; exiting")
