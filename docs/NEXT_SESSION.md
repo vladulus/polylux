@@ -33,20 +33,21 @@
 
 ## Open items, in order
 
-1. **Who writes the fan chip besides us.** Event Log on 25.10 showed
-   foreign values both in manual mode (mode 0x00, cmd we never sent,
-   following temperature) and switches to SmartFan (mode 0x40). Read the
-   corrections after Vlad's reboot (ASUS stack + AsIO3 gone): none →
-   it was ASUS software; still there → BIOS/EC, look at BIOS Q-Fan.
+1. **Fan headers Polylux drives need BIOS Q-Fan Control = Disabled.**
+   With Q-Fan on, the board firmware keeps writing the NCT6798D: own duty
+   values in manual mode (mode 0x00) and switches back to SmartFan (0x40).
+   Measured 25.10: 17 daemon corrections in 10 min after a reboot with the
+   ASUS software already gone; 0 in 10 min after Vlad disabled Q-Fan on
+   CHA_FAN1 / CPU_FAN / CHA_FAN2 / RAD_FAN1. Not yet in the installer docs
+   or the README — add it there.
 2. **Ryujin image/GIF display.** Uploads complete but the panel keeps
    the hardware monitor or refuses (`ec 7f 02`). AC's sequence after the
    upload (`SetProfile multi_media_player`) is in
    `scratch/captures/ryujin_files_USBPcap*.pcap` — decode it, no AC needed.
 3. **Radiator fan staging.** Both radiator fans share one Ryujin PWM;
    staging needs one moved to a free board header (#5–#7) — Vlad's call.
-4. **Installer** (`installer/Polylux.iss`) not rebuilt since July;
-   `neutralize-asus.cmd` CRLF change uncommitted in an earlier session —
-   check `git status`.
+4. **Installer** (`installer/Polylux.iss`) not rebuilt since July; the
+   PyInstaller step works again (chardet fix, 25.10).
 
 ## Run modes
 

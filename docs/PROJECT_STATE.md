@@ -1957,9 +1957,12 @@ one-time install.
         compares the output with the last software value and rewrites on
         a >2 % mismatch, logging a Warning to the Application Event Log
         (provider `PolyluxSensorDaemon`). On 2026-10-25 that log showed
-        another writer on the chip (RAD_FAN1 pulled from 100 % to
-        92…68 %, CHA_FAN1 held at 5.9 % against 8–11 %); not identified
-        yet.
+        another writer on the chip; the register dump on each correction
+        (mode / command / output) showed the board firmware: its own duty
+        in manual mode and switches back to SmartFan (mode 0x40). It
+        stopped entirely once BIOS Q-Fan Control was Disabled on the four
+        headers (17 corrections / 10 min before, 0 / 10 min after). Polylux
+        needs Q-Fan Disabled on every header it drives.
   - **JSON wire format** matches LHM's Remote Web Server exactly
     (root `{id, Text, Children}` → PC → hardware → sensor-type groups
     → leaves with `{id, Text, Min, Value, Max, SensorId, Type,
