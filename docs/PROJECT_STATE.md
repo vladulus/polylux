@@ -638,8 +638,15 @@ dev 15 in that capture, its HID commands use the same `ec` prefix):
                         (no conversion — AC sends the .jpg as-is),
                         ec 73 ff, ec 5c <settings>, ec 5d 00 01 11 01 01 05,
                         ec 51 11 01 01            → shown on the LCD (Vlad)
-    Hardware Monitor:   ec 51 21 + ec 52 <layout> (00 00 02 02 single,
-                        00 03 02 02 quad; ec 53 NN <label> per slot)
+    Hardware Monitor:   ec 51 21 + ec 52 00 03 02 02 .. (quad layout; byte 4
+                        is the slot icon — 02 thermometer, 01 fan; it is NOT
+                        a page count, tried 2026-10-25) + ec 53 <slot>
+                        <label @3> <value @39, UTF-8 with unit glyph>.
+                        The firmware shows 0 until the host feeds the slots;
+                        Polylux sends them every 2 s.
+                        'ROG Live Service' (service name with spaces; exe
+                        ROGLiveService.exe) keeps feeding zeros / N/A when AC
+                        can't read sensors — it must be stopped with AC.
     Custom Banner:      ec 55 01 02, ec 55 02 <i> ... text segments,
                         ec 51 04
     Firmware animation: ec 5d 00 01 10 01 01 05 + ec 51 10 01 01
@@ -666,6 +673,12 @@ More from `ryujin_warn_USBPcap1.pcap` (markers in `ryujin_warn_markers.txt`):
                         switch changes (only an unchanged ec 5c) — [Probabil]
                         AC watches the temperature itself and switches the
                         screen.
+
+Handshake (ryujin_steps / oled_presets captures): every `ec XX` gets an
+`ec (XX & 7f)` reply (ec 99 -> ec 19, ec dc -> ec 5c); each 4 KB bulk chunk
+is requested by an `ee 14 00 00 10` event; `ee 13 00 01` / `ee 13 00 ff`
+bracket the upload. Sending chunks without waiting hung the Ryujin's display
+until a power cycle (2026-10-25). Implemented in polylux/drivers/ec_transfer.py.
 
 Fans — AC drives them in software, and only after Auto Tuning (Vlad:
 fan control did nothing until he ran it). Decoded from
