@@ -110,3 +110,39 @@ def test_autotune_measures_radiator_pump_and_head_fan(tmp_path, monkeypatch):
     assert tops["ryujin:radiator"] == 2000
     assert tops["ryujin:pump"] == 3000
     assert tops["ryujin:head_fan"] == 4000
+
+
+def test_motherboard_fans_get_liquid_temp_from_ryujin(tmp_path, monkeypatch):
+    """'liquid' is offered to every fan; the board runner must pass the
+    Ryujin's coolant reading while it is fresh, not fall back."""
+    import threading
+    import time as _t
+    from polylux.config import load
+    from polylux.sensors import fan_control, lhm
+    from polylux.service import main
+    from polylux.ui.state import ServiceState
+
+    cfgp = tmp_path / "polylux.yaml"
+    cfgp.write_text("ryujin_lcd:\n  enabled: true\nfans:\n  enabled: true\n", encoding="utf-8")
+    st = ServiceState(cfg=load(cfgp), yaml_path=cfgp)
+    stop = threading.Event()
+    got = {}
+
+    class FakeSensors:
+        def temps(self):
+            return {"CPU Package": 50.0}
+
+    def fake_apply(fans, temps):
+        got.update(temps)
+        stop.set()
+
+    monkeypatch.setattr(lhm, "LHMSensors", FakeSensors)
+    monkeypatch.setattr(fan_control, "apply_all", fake_apply)
+    st.set_frame("ryujin_fans", {"liquid_c": 31.4, "ts": _t.monotonic()})
+    main.run_fans(st, stop)
+    assert got["liquid"] == 31.4
+
+    got.clear(); stop.clear()
+    st.set_frame("ryujin_fans", {"liquid_c": 31.4, "ts": _t.monotonic() - 60})
+    main.run_fans(st, stop)
+    assert "liquid" not in got            # stale reading is not used

@@ -418,6 +418,11 @@ def run_fans(state: ServiceState, stop: threading.Event) -> None:
         if fcfg.enabled and fcfg.fans:
             try:
                 temps = {k.lower(): v for k, v in sensors.temps().items()}
+                # "liquid" is the Ryujin's coolant sensor, read by run_ryujin
+                # over USB; offered to every fan, so pass it on while fresh.
+                aio = state.last_frame("ryujin_fans")
+                if aio and time.monotonic() - aio.get("ts", 0) < 15:
+                    temps["liquid"] = aio["liquid_c"]
                 apply_all(state.effective_fans(), temps)
             except Exception as ex:
                 log.warning("fan runner tick failed: %s", ex)
@@ -474,7 +479,8 @@ def _ryujin_autotune(lcd, state: ServiceState) -> None:
     from polylux.sensors.fan_control import RYUJIN_HEAD_FAN, RYUJIN_PUMP, RYUJIN_RADIATOR
 
     def publish(st, duties, tuning=None):
-        frame = {**st, "pump_target": duties[0], "head_target": duties[1], "aio_pct": duties[2]}
+        frame = {**st, "pump_target": duties[0], "head_target": duties[1], "aio_pct": duties[2],
+                 "ts": time.monotonic()}
         if tuning:
             frame["tuning"] = tuning      # the Fans page shows it in its banner
         state.set_frame("ryujin_fans", frame)
@@ -633,7 +639,8 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
                              *target, status["liquid_c"])
                     fans_sent = target
                 state.set_frame("ryujin_fans", {**status, "pump_target": pump,
-                                                "head_target": head, "aio_pct": rad})
+                                                "head_target": head, "aio_pct": rad,
+                                                "ts": time.monotonic()})
             except Exception as ex:
                 log.warning("ryujin fan tick failed: %s", ex)
                 if "not connected" in str(ex) or "No such device" in str(ex) or "reply within" in str(ex):
