@@ -8,26 +8,41 @@ import pytest
 
 from polylux.drivers.anime_matrix.usb_direct import (
     AniMeMatrix,
-    AniMeMatrixError,
     FRAME_SIZE,
-    HID_PREP,
-    PID,
-    VID,
+    _HID_PREP_7F,
 )
+from polylux.drivers.chip_1a21 import PID, VID
+
+
+class _FakeChip:
+    """Records what the matrix sends instead of touching USB."""
+
+    def __init__(self):
+        self.hid, self.bulk, self.inits = [], [], 0
+
+    def init_for_matrix(self):
+        self.inits += 1
+
+    def hid_write(self, pkt):
+        self.hid.append(bytes(pkt))
+
+    def bulk_write(self, data):
+        self.bulk.append(bytes(data))
+        return len(data)
 
 
 def test_constants():
     assert VID == 0x0B05
     assert PID == 0x1A21
     assert FRAME_SIZE == 768
-    assert len(HID_PREP) == 65
-    assert HID_PREP[:5] == bytes([0xEC, 0x7F, 0x04, 0x00, 0x03])
-    assert all(b == 0 for b in HID_PREP[5:])
+    assert len(_HID_PREP_7F) == 65
+    assert _HID_PREP_7F[:5] == bytes([0xEC, 0x7F, 0x04, 0x00, 0x03])
+    assert all(b == 0 for b in _HID_PREP_7F[5:])
 
 
 def _make_offline_matrix() -> AniMeMatrix:
     """Build an instance without touching USB — frame helpers don't need it."""
-    return AniMeMatrix(_usb_dev=None, _hid_dev=None, _frame=bytearray(FRAME_SIZE))
+    return AniMeMatrix(chip=_FakeChip())
 
 
 def test_clear_zeros_frame():
@@ -79,10 +94,12 @@ def test_send_frame_wrong_size_rejected():
         m.send_frame(b"\x00" * 100)
 
 
-def test_send_frame_no_handle():
+def test_send_frame_sequence():
     m = _make_offline_matrix()
-    with pytest.raises(AniMeMatrixError, match="not open"):
-        m.send_frame(b"\x00" * FRAME_SIZE)
+    m.send_frame(b"\x01" * FRAME_SIZE)
+    assert m.chip.inits == 1
+    assert [p[:2].hex() for p in m.chip.hid] == ["ecc1", "ec7f"]
+    assert m.chip.bulk == [b"\x01" * FRAME_SIZE]
 
 
 def test_close_idempotent():
