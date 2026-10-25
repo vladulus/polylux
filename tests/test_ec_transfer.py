@@ -15,7 +15,7 @@ class FakeDevice:
         pkt = bytes(pkt)
         self.log.append(pkt[:2].hex())
         op = pkt[1]
-        self.inbox.append(bytes([0xEC, 0x71 if op == 0xF1 else op]) + b"\0" * 63)
+        self.inbox.append(bytes([0xEC, op & 0x7F]) + b"\0" * 63)
         if pkt[:3] == b"\xec\x73\x01":
             self.inbox.append(b"\xee\x13\x00\x01" + b"\0" * 61)
         if pkt[:3] == b"\xec\x73\xff":

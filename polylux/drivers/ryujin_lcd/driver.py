@@ -157,15 +157,14 @@ class RyujinLCD:
         """Upload a 320x240 JPEG or GIF and show it (AC's Image mode).
 
         Every step waits for the device's reply (ec_transfer docstring);
-        the f1 reply comes back tagged ec 71.
+        replies drop the top bit of the opcode (ec f1 -> ec 71).
         """
         from polylux.drivers import ec_transfer as ec
 
         p71, pf1, p72, p73, p7f = (p for p, _ in build_upload_prep_packets(image_bytes))
         ec.drain(self.hid_read)
         self.command(p71)
-        self.hid_write(pf1)
-        ec.wait_for(self.hid_read, b"\xec\x71", 1.0)
+        self.command(pf1)
         self.command(p72)
         self.command(p73)
         ec.wait_for(self.hid_read, b"\xee\x13\x00\x01", 2.0)
@@ -250,6 +249,23 @@ def build_upload_prep_packets(image_bytes: bytes) -> list[tuple[bytes, float]]:
         (_pad([0xEC, 0x73, 0x01]), 0.5),
         (_pad([0xEC, 0x7F, 0x02, *size]), 0.5),
     ]
+
+
+# Hardware Monitor: AC resends 4 slots + the layout every ~6 s; the firmware
+# shows 0 until it gets them. Label at byte 3, value (UTF-8, unit glyph
+# included, e.g. "45.0℃") at byte 39 — ryujin_USBPcap1.pcap.
+MONITOR_LABEL_AT, MONITOR_VALUE_AT = 3, 39
+MONITOR_LAYOUT_QUAD = _pad([0xEC, 0x52, 0x00, 0x03, 0x02, 0x02, 0x00, 0x00, 0x00, 0x00,
+                            0xFF, 0xFF, 0xFF, 0x00, 0xFF, 0xFF, 0xFF, 0x00, 0xFF, 0xFF, 0xFF])
+
+
+def build_monitor_packet(slot: int, label: str, value: str) -> bytes:
+    pkt = bytearray(_pad([0xEC, 0x53, slot]))
+    lab = label.encode("utf-8")[:MONITOR_VALUE_AT - MONITOR_LABEL_AT - 1]
+    val = value.encode("utf-8")[:HID_PACKET_SIZE - MONITOR_VALUE_AT]
+    pkt[MONITOR_LABEL_AT:MONITOR_LABEL_AT + len(lab)] = lab
+    pkt[MONITOR_VALUE_AT:MONITOR_VALUE_AT + len(val)] = val
+    return bytes(pkt)
 
 
 def build_animation_packets(index: int) -> tuple[bytes, bytes]:

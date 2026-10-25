@@ -48,9 +48,11 @@ def wait_for(read: Callable[[int], bytes], head: bytes, timeout: float) -> bytes
 
 def command(write: Callable[[bytes], None], read: Callable[[int], bytes],
             pkt: bytes, timeout: float = 1.0) -> bytes:
-    """Send one `ec XX` command and return its `ec XX` reply."""
+    """Send one `ec XX` command and return its reply, tagged `ec (XX & 7f)`:
+    reads have the top bit set and the reply drops it (ec 99 -> ec 19,
+    ec dc -> ec 5c, ec f1 -> ec 71)."""
     write(pkt)
-    return wait_for(read, pkt[:2], timeout)
+    return wait_for(read, bytes([pkt[0], pkt[1] & 0x7F]), timeout)
 
 
 def bulk_upload(bulk_write: Callable[[bytes], int], read: Callable[[int], bytes],

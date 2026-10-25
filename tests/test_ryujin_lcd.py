@@ -63,3 +63,12 @@ def test_oled_gif_is_256x64_and_fits(tmp_path):
     data = oled_gif(src)
     im = Image.open(io.BytesIO(data))
     assert data[:6] == b"GIF89a" and im.size == (256, 64) and len(data) <= MAX_BYTES
+
+
+def test_monitor_packet_matches_capture():
+    from polylux.drivers.ryujin_lcd.driver import MONITOR_LAYOUT_QUAD, build_monitor_packet
+    # ryujin_USBPcap1.pcap 01:10:09, slot 0
+    captured = bytes.fromhex(
+        "ec5300" "4350552054656d702e" + "00" * 27 + "34352e30e28483")
+    assert build_monitor_packet(0, "CPU Temp.", "45.0℃")[:len(captured)] == captured
+    assert MONITOR_LAYOUT_QUAD[:6].hex() == "ec5200030202"

@@ -426,7 +426,9 @@ def run_fans(state: ServiceState, stop: threading.Event) -> None:
 
 def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
     """Apply Ryujin scene + settings whenever they change (§9.3)."""
-    from polylux.drivers.ryujin_lcd.driver import RyujinSettings, _pad
+    from polylux.drivers.ryujin_lcd.driver import (
+        MONITOR_LAYOUT_QUAD, RyujinSettings, _pad, build_monitor_packet,
+    )
     from polylux.drivers.ryujin_lcd.render import ryujin_image
 
     from polylux.drivers.ryujin_lcd import RyujinLCD
@@ -435,7 +437,7 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
 
     temps = LHMSensors()
     fans_sent = None
-    next_fan_tick = 0.0
+    next_fan_tick = next_monitor_tick = 0.0
     applied = None
     while not stop.is_set():
         if lcd is None:
@@ -480,6 +482,24 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
                     lcd.close()
                     lcd = None
                     continue
+
+        # Hardware Monitor shows 0 until the host feeds the four slots.
+        if rcfg.scene == "hardware_monitor" and time.monotonic() >= next_monitor_tick:
+            next_monitor_tick = time.monotonic() + 5.0
+            try:
+                import psutil
+                t = temps.temps()
+                status = lcd.read_status()
+                fmt = lambda v: f"{v:.1f}℃" if v is not None else "--"
+                slots = (("CPU Temp.", fmt(t.get("cpu package"))),
+                         ("GPU Temp.", fmt(t.get("gpu core"))),
+                         ("Liquid Temp.", fmt(status["liquid_c"])),
+                         ("CPU Usage", f"{psutil.cpu_percent():.0f}%"))
+                for i, (label, value) in enumerate(slots):
+                    lcd.command(build_monitor_packet(i, label, value))
+                lcd.command(MONITOR_LAYOUT_QUAD)
+            except Exception as ex:
+                log.warning("ryujin monitor tick failed: %s", ex)
 
         # Fans: AC recomputes every ~4 s; the firmware keeps the last values.
         if rcfg.fans_enabled and time.monotonic() >= next_fan_tick:
