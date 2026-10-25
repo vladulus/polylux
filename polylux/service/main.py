@@ -495,6 +495,9 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
                     fans_sent = target
             except Exception as ex:
                 log.warning("ryujin fan tick failed: %s", ex)
+                if "not connected" in str(ex) or "No such device" in str(ex) or "reply within" in str(ex):
+                    lcd.close()
+                    lcd = None
         stop.wait(1.0)
 
 
