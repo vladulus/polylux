@@ -53,3 +53,12 @@ def test_missing_chunk_ack_stops_the_upload():
     with pytest.raises(ec.TransferError):
         ec.bulk_upload(dev.bulk, dev.read, b"x" * 9000, timeout=0.05)
     assert dev.log == ["bulk4096"]
+
+
+def test_set_fans_bytes_match_full_speed_capture():
+    dev = FakeDevice()
+    sent = []
+    lcd = _lcd(dev)
+    lcd.hid_write = lambda p: (sent.append(bytes(p)), dev.write(p))
+    lcd.set_fans(100, 100, 100)
+    assert [p[:5].hex() for p in sent] == ["ec1a006464", "ec210000ff"]

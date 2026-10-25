@@ -190,6 +190,14 @@ class RyujinLcdConfig:
     animation: int = 0               # 0..2, used when scene=animation
     portrait: bool = True
     dark_when_off: bool = True       # no standby screen with the PC off
+    # Fans (§9.3, ryujin_autotune capture). The firmware keeps the last
+    # values it got; defaults = what it ran on 2026-10-25 after AC.
+    fans_enabled: bool = True
+    pump_pct: int = 100              # ec 1a b3
+    embedded_fan_pct: int = 30       # ec 1a b4 — the fan on the pump head, cools the VRMs
+    aio_temp_source: str = "cpu package"
+    aio_curve: tuple[tuple[float, float], ...] = (   # (°C, %) — AC's Smart default
+        (20.0, 20.0), (36.0, 40.0), (55.0, 70.0), (85.0, 100.0))
 
     SCENES = ("hardware_monitor", "image", "animation", "off")
 
@@ -198,6 +206,11 @@ class RyujinLcdConfig:
             raise ValueError(f"ryujin_lcd.scene must be one of {self.SCENES}, got {self.scene!r}")
         if not 0 <= self.animation <= 2:
             raise ValueError(f"ryujin_lcd.animation must be 0..2, got {self.animation}")
+        for name in ("pump_pct", "embedded_fan_pct"):
+            if not 0 <= getattr(self, name) <= 100:
+                raise ValueError(f"ryujin_lcd.{name} must be 0..100")
+        if len(self.aio_curve) < 2:
+            raise ValueError("ryujin_lcd.aio_curve needs at least 2 points")
 
 
 @dataclass
@@ -390,6 +403,12 @@ def load(path: str | Path = DEFAULT_CONFIG_PATH) -> PolyluxConfig:
     cfg.ryujin_lcd.animation = int(r.get("animation", cfg.ryujin_lcd.animation))
     cfg.ryujin_lcd.portrait = bool(r.get("portrait", cfg.ryujin_lcd.portrait))
     cfg.ryujin_lcd.dark_when_off = bool(r.get("dark_when_off", cfg.ryujin_lcd.dark_when_off))
+    cfg.ryujin_lcd.fans_enabled = bool(r.get("fans_enabled", cfg.ryujin_lcd.fans_enabled))
+    cfg.ryujin_lcd.pump_pct = int(r.get("pump_pct", cfg.ryujin_lcd.pump_pct))
+    cfg.ryujin_lcd.embedded_fan_pct = int(r.get("embedded_fan_pct", cfg.ryujin_lcd.embedded_fan_pct))
+    cfg.ryujin_lcd.aio_temp_source = str(r.get("aio_temp_source", cfg.ryujin_lcd.aio_temp_source))
+    if isinstance(r.get("aio_curve"), list):
+        cfg.ryujin_lcd.aio_curve = tuple((float(t), float(d)) for t, d in r["aio_curve"])
 
     a = raw.get("aura_rgb") or {}
     cfg.aura_rgb.enabled = bool(a.get("enabled", False))

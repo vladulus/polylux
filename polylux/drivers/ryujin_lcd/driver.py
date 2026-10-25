@@ -181,6 +181,25 @@ class RyujinLCD:
         ec_transfer.drain(self.hid_read)
         self.command(settings.packet())
 
+    def set_fans(self, pump_pct: int, embedded_pct: int, aio_pct: float) -> None:
+        """ec 1a 00 <pump%> <embedded fan%> + ec 21 00 00 <AIO duty 0..255>
+        (AC's Full Speed preset sent 64 64 / ff)."""
+        self.command(_pad([0xEC, 0x1A, 0x00, pump_pct, embedded_pct]))
+        self.command(_pad([0xEC, 0x21, 0x00, 0x00, round(max(0.0, min(100.0, aio_pct)) * 2.55)]))
+
+    def read_status(self) -> dict:
+        """ec 99 / ec a0 / ec 9a readings, decoded as far as captured."""
+        s = self.command(_pad([0xEC, 0x99]))
+        a = self.command(_pad([0xEC, 0xA0]))
+        f = self.command(_pad([0xEC, 0x9A]))
+        return {
+            "liquid_c": s[3] + s[4] / 10,                       # [Probabil] liquid temp
+            "rpm_1": int.from_bytes(s[5:7], "little"),          # [Ghicesc] pump
+            "rpm_2": int.from_bytes(s[7:9], "little"),          # [Ghicesc] embedded fan
+            "aio_rpm": int.from_bytes(a[5:7], "little"),
+            "pump_pct": f[4], "embedded_pct": f[5],
+        }
+
     def show_animation(self, index: int) -> None:
         """One of the three firmware animations (AC's Default Animation)."""
         for pkt in build_animation_packets(index):

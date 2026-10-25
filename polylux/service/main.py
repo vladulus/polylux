@@ -430,7 +430,12 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
     from polylux.drivers.ryujin_lcd.render import ryujin_image
 
     from polylux.drivers.ryujin_lcd import RyujinLCD
+    from polylux.sensors.fan_control import interpolate_curve
+    from polylux.sensors.lhm import LHMSensors
 
+    temps = LHMSensors()
+    fans_sent = None
+    next_fan_tick = 0.0
     applied = None
     while not stop.is_set():
         if lcd is None:
@@ -438,7 +443,7 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
             # then fail with "device is not connected" forever.
             try:
                 lcd = RyujinLCD.open()
-                applied = None
+                applied = fans_sent = None
                 log.info("ryujin: reopened")
             except Exception as ex:
                 log.debug("ryujin reopen failed: %s", ex)
@@ -474,6 +479,22 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
                 if "not connected" in str(ex) or "No such device" in str(ex) or "reply within" in str(ex):
                     lcd.close()
                     lcd = None
+                    continue
+
+        # Fans: AC recomputes every ~4 s; the firmware keeps the last values.
+        if rcfg.fans_enabled and time.monotonic() >= next_fan_tick:
+            next_fan_tick = time.monotonic() + 4.0
+            try:
+                temp = temps.temps().get(rcfg.aio_temp_source.lower())
+                aio = interpolate_curve(list(rcfg.aio_curve), temp) if temp is not None else 100.0
+                target = (rcfg.pump_pct, rcfg.embedded_fan_pct, round(aio))
+                if target != fans_sent:
+                    lcd.set_fans(*target)
+                    log.info("ryujin fans: pump %d%% embedded %d%% aio %d%% (%s=%s)",
+                             *target, rcfg.aio_temp_source, temp)
+                    fans_sent = target
+            except Exception as ex:
+                log.warning("ryujin fan tick failed: %s", ex)
         stop.wait(1.0)
 
 
