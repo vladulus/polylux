@@ -22,6 +22,7 @@ from collections import deque
 from typing import Callable, Optional
 
 CHUNK = 4096
+GROUP_PAUSE_S = 0.13   # after every 4 chunks, as AC does (ryujin_files_USBPcap1.pcap)
 
 
 class TransferError(RuntimeError):
@@ -87,5 +88,9 @@ class Channel:
             if n != CHUNK:
                 raise TransferError(f"bulk write short at {off}: {n}/{CHUNK}")
             self.wait_for(b"\xee\x14", timeout)
+            # AC pauses ~130 ms after every 4th chunk (16 KB); without it the
+            # Ryujin rebooted ~380 KB into a 1 MB GIF (2026-10-25).
+            if (off // CHUNK) % 4 == 3:
+                time.sleep(GROUP_PAUSE_S)
             if progress:
                 progress(off + CHUNK, len(padded))
