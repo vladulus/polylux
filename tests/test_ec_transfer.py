@@ -20,6 +20,8 @@ class FakeDevice:
             self.inbox.append(b"\xee\x13\x00\x01" + b"\0" * 61)
         if pkt[:3] == b"\xec\x73\xff":
             self.inbox.append(b"\xee\x13\x00\xff" + b"\0" * 61)
+        if pkt[:3] == b"\xec\x73\x03":
+            self.inbox.append(b"\xee\x13\x00\x03" + b"\0" * 61)
 
     def bulk(self, data):
         self.log.append(f"bulk{len(data)}")

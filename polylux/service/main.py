@@ -479,7 +479,11 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
             except Exception as ex:
                 state.mark_update("ryujin_lcd", error=str(ex))
                 log.warning("ryujin update failed: %s", ex)
-                if "not connected" in str(ex) or "No such device" in str(ex) or "reply within" in str(ex):
+                if rcfg.scene == "image":
+                    # A refused upload is retried only after the user changes
+                    # something; hammering it left the LCD stuck (2026-10-25).
+                    applied = key
+                if "not connected" in str(ex) or "No such device" in str(ex):
                     lcd.close()
                     lcd = None
                     continue

@@ -166,27 +166,30 @@ class RyujinLCD:
         ch = self._channel()
         p71, pf1, p72, p73, p7f = (p for p, _ in build_upload_prep_packets(image_bytes))
         ch.drain()
+        # The LCD keeps uploads in slots (AC: "up to 7"); when the slot is
+        # taken a write is refused (ee 13 10 01, ec 7f 02, no ee 14). How AC
+        # frees a slot is not decoded yet — ec 72 + ec 73 03 alone did not
+        # change free space (2026-10-25).
         ch.command(p71)
         ch.command(pf1)
         ch.command(p72)
-        # "ready" is ee 13 xx 01 (xx 00 or 10 seen live); the ec 73 reply
-        # itself sometimes never comes, so only the event is awaited.
-        ch.write(p73)
+        ch.write(p73)                   # the ec 73 reply sometimes never comes
         try:
             ch.wait_for_event(0x13, 0x01, 2.0)
         except Exception:
-            # Seen live: after an aborted upload the LCD stays in "receiving"
-            # and never says ready again until ec 73 ff closes that session.
+            # After an aborted upload the LCD stays in "receiving" until
+            # ec 73 ff closes that session.
             ch.write(_pad([0xEC, 0x73, 0xFF]))
             time.sleep(0.5)
             ch.drain()
             ch.write(p73)
             ch.wait_for_event(0x13, 0x01, 2.0)
         ch.command(p7f)
-        ch.bulk_upload(lambda d: self.bulk_write(d), image_bytes)
+        ch.bulk_upload(lambda d: self.bulk_write(d), image_bytes, timeout=6.0)
         ch.write(_pad([0xEC, 0x73, 0xFF]))
-        ch.wait_for_event(0x13, 0xFF, 3.0)
-        for pkt in (settings.packet(), *MODE_IMAGE):
+        ch.wait_for_event(0x13, 0xFF, 5.0)
+        mode = MODE_GIF if image_bytes[:4] == b"GIF8" else MODE_IMAGE
+        for pkt in (settings.packet(), *mode):
             ch.command(pkt)
 
     def apply_settings(self, settings: "RyujinSettings") -> None:
@@ -222,8 +225,10 @@ def _pad(head) -> bytes:
     return bytes(head) + b"\x00" * (HID_PACKET_SIZE - len(head))
 
 
-MODE_IMAGE = (_pad([0xEC, 0x5D, 0x00, 0x01, 0x11, 0x01, 0x01, 0x05]),
+MODE_IMAGE = (_pad([0xEC, 0x5D, 0x00, 0x01, 0x11, 0x01, 0x01, 0x05]),   # JPEG still
               _pad([0xEC, 0x51, 0x11, 0x01, 0x01]))
+MODE_GIF = (_pad([0xEC, 0x5D, 0x00, 0x01, 0x10, 0x01, 0x01, 0x05]),     # animated GIF
+            _pad([0xEC, 0x51, 0x10, 0x01, 0x01]))
 
 
 @dataclass(frozen=True)
