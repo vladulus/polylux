@@ -56,10 +56,14 @@ def test_oled_hw_mode_rejects_unknown():
         o.validate()
 
 
-def test_oled_rotate_rejects_unknown_metric():
+def test_oled_rotate_takes_any_sensor_but_not_empty():
+    """Sources are the six legacy metrics or any live sensor name (same list
+    as the Ryujin), so only an empty entry is invalid."""
     o = OledConfig()
     o.hw_mode = "rotate"
-    o.rotate_sources = ("cpu_temp", "not_a_metric")
+    o.rotate_sources = ("cpu_temp", "vrm", "rpm:fan #2")
+    o.validate()
+    o.rotate_sources = ("cpu_temp", "")
     with pytest.raises(ValueError, match="rotate_sources"):
         o.validate()
 

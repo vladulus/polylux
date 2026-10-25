@@ -163,8 +163,10 @@ class OledConfig:
     def validate(self) -> None:
         if self.scene not in self.SCENES:
             raise ValueError(f"oled.scene must be one of {self.SCENES}, got {self.scene!r}")
-        if self.scene == "hardware_monitor" and self.value_source not in self.VALUE_SOURCES:
-            raise ValueError(f"oled.value_source must be one of {self.VALUE_SOURCES}, got {self.value_source!r}")
+        # value_source / rotate_sources: the legacy keys in VALUE_SOURCES or
+        # any live sensor name (polylux.sensors.sources), so only non-empty.
+        if self.scene == "hardware_monitor" and not self.value_source:
+            raise ValueError("oled.value_source cannot be empty")
         if self.font_size not in self.FONT_SIZES:
             raise ValueError(f"oled.font_size must be one of {self.FONT_SIZES}, got {self.font_size!r}")
         if self.hw_mode not in self.HW_MODES:
@@ -174,10 +176,7 @@ class OledConfig:
         if not 1 <= self.scroll_speed <= 100:
             raise ValueError(f"oled.scroll_speed must be 1..100, got {self.scroll_speed}")
         if self.hw_mode == "rotate":
-            bad = [s for s in self.rotate_sources if s not in self.VALUE_SOURCES]
-            if bad:
-                raise ValueError(f"oled.rotate_sources contains unknown metrics: {bad}")
-            if not self.rotate_sources:
+            if not self.rotate_sources or not all(self.rotate_sources):
                 raise ValueError("oled.rotate_sources cannot be empty when hw_mode=rotate")
 
 

@@ -295,7 +295,13 @@ def _read_value_source(source: str) -> str:
     return "?"
 
 
-def _label_for_source(source: str) -> str:
+# The OLED's original metric keys; any other source comes from
+# polylux.sensors.sources (every live sensor, same list as the Ryujin).
+LEGACY_OLED_SOURCES = ("cpu_temp", "gpu_temp", "cpu_pct", "gpu_pct", "mem_pct", "fan_rpm", "static")
+
+
+def _label_for_source(source: str, fan_names=None) -> str:
+    from polylux.sensors.sources import label
     return {
         "cpu_temp": "CPU TEMP",
         "gpu_temp": "GPU TEMP",
@@ -304,7 +310,19 @@ def _label_for_source(source: str) -> str:
         "mem_pct": "MEM",
         "fan_rpm": "FAN",
         "static": "",
-    }.get(source, source.upper())
+    }.get(source) or label(source, fan_names)
+
+
+def _oled_reader(state: ServiceState, temps):
+    """One tick's reader for the OLED: legacy keys keep their own readers."""
+    from polylux.sensors.sources import make_reader
+
+    def ryujin():
+        aio = state.last_frame("ryujin_fans")
+        return aio if aio and time.monotonic() - aio.get("ts", 0) < 15 else None
+
+    shared = make_reader(temps, ryujin=ryujin, deg=" °C", decimals=0)
+    return lambda src: _read_value_source(src) if src in LEGACY_OLED_SOURCES else shared(src)
 
 
 def run_oled(chip, state: ServiceState, stop: threading.Event) -> None:
@@ -324,6 +342,8 @@ def run_oled(chip, state: ServiceState, stop: threading.Event) -> None:
 
     last_settings = None
     last_image = None
+    from polylux.sensors.lhm import LHMSensors
+    temps = LHMSensors()
 
     while not stop.is_set():
         ocfg = state.snapshot().oled
@@ -344,14 +364,16 @@ def run_oled(chip, state: ServiceState, stop: threading.Event) -> None:
         is_scrolling = False
         try:
             if ocfg.scene == "hardware_monitor":
+                read = _oled_reader(state, temps)
                 if ocfg.hw_mode == "rotate" and ocfg.rotate_sources:
                     idx = int(time.time() / max(ocfg.rotate_interval_s, 0.5)) % len(ocfg.rotate_sources)
                     src = ocfg.rotate_sources[idx]
-                    value = _read_value_source(src)
-                    label = _label_for_source(src)
+                    value = read(src)
+                    from polylux.sensors.sources import fan_card_names
+                    label = _label_for_source(src, fan_card_names(state.snapshot().fans.fans))
                 else:
                     src = ocfg.value_source
-                    value = _read_value_source(src)
+                    value = read(src)
                     label = ocfg.label
                 # OLED firmware renders all text in uppercase — match that
                 # so the preview matches the panel.
@@ -430,33 +452,9 @@ def run_fans(state: ServiceState, stop: threading.Event) -> None:
 
 
 def _monitor_values(temps, lcd):
-    """Return source -> display string for the Ryujin monitor slots, reading
-    each sensor family once per tick (sources: see RyujinLcdConfig)."""
-    import psutil
-
-    t = temps.temps()
-    fans = {f.name.lower(): f.rpm for f in temps.fans()}
-    cache: dict = {}
-
-    def value(source: str) -> str:
-        s = source.lower()
-        if s == "liquid":
-            if "liquid" not in cache:
-                cache["liquid"] = lcd.read_status()["liquid_c"]
-            return f"{cache['liquid']:.1f}℃"
-        if s == "cpu_pct":
-            return f"{psutil.cpu_percent():.0f}%"
-        if s == "mem_pct":
-            return f"{psutil.virtual_memory().percent:.0f}%"
-        if s == "gpu_pct":
-            return _read_value_source("gpu_pct")
-        if s.startswith("rpm:"):
-            rpm = fans.get(s[4:])
-            return f"{rpm}rpm" if rpm is not None else "--"
-        v = t.get(s)
-        return f"{v:.1f}℃" if v is not None else "--"
-
-    return value
+    """source -> display string for the Ryujin monitor slots (one tick)."""
+    from polylux.sensors.sources import make_reader
+    return make_reader(temps, ryujin=lcd.read_status)
 
 
 # The pump never goes below this, whatever the curve says: a stopped pump

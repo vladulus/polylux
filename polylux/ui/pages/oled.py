@@ -1,18 +1,21 @@
 """OLED page — scenes: hardware_monitor / text / image / off.
 
-Includes the SINGLE / ROTATE mode toggle for hardware_monitor with a
-multi-checkbox metric picker + interval slider.
+hardware_monitor: SINGLE shows one source, ROTATE cycles through the checked
+ones. Sources are the original six metrics plus every live sensor (the same
+list as the Ryujin's hardware monitor, polylux.sensors.sources).
 """
 from __future__ import annotations
 
 from pathlib import Path
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QCheckBox, QFileDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QFileDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+    QListWidget, QListWidgetItem, QPushButton, QVBoxLayout, QWidget,
 )
 
 from polylux.config import OledConfig
+from polylux.sensors.sources import available as available_sources, fan_card_names, label as source_label
 from polylux.ui.pages.base import DevicePage
 from polylux.ui.widgets.live_preview import OledLivePreview
 from polylux.ui.widgets.seg_button import SegButton
@@ -129,43 +132,50 @@ class OledPage(DevicePage):
         self._state.update_device("oled", {"hw_mode": mode})
         self._render_hw_mode(mode)
 
+    def _source_list(self, current: tuple[str, ...]) -> list[str]:
+        """The original six metrics, then every live sensor (same list as the
+        Ryujin); a configured source that isn't live right now stays listed."""
+        out = list(METRIC_DISPLAY)
+        out += [x for x in available_sources() if x not in out]
+        out += [x for x in current if x not in out]
+        return out
+
+    def _source_text(self, key: str) -> str:
+        return METRIC_DISPLAY.get(key) or source_label(
+            key, fan_card_names(self._state.snapshot().fans.fans))
+
     def _render_hw_mode(self, mode: str) -> None:
         _clear_layout(self._metric_holder_v)
 
         cfg: OledConfig = self._state.snapshot().oled
         if mode == "single":
             self._metric_holder_v.addWidget(QLabel("METRIC TO DISPLAY"))
-            grid = QGridLayout()
-            grid.setSpacing(6)
-            for i, key in enumerate(["cpu_temp", "gpu_temp", "cpu_pct",
-                                     "gpu_pct", "mem_pct", "fan_rpm"]):
-                btn = QPushButton(METRIC_DISPLAY[key])
-                btn.setCheckable(True)
-                btn.setChecked(key == cfg.value_source)
-                btn.setProperty("on", "true" if key == cfg.value_source else "false")
-                btn.clicked.connect(lambda _ck, k=key: self._set_metric(k))
-                grid.addWidget(btn, i // 2, i % 2)
-            self._metric_holder_v.addLayout(grid)
+            combo = QComboBox()
+            for key in self._source_list((cfg.value_source,)):
+                combo.addItem(self._source_text(key), key)
+            combo.setCurrentIndex(max(0, combo.findData(cfg.value_source)))
+            combo.currentIndexChanged.connect(lambda _i: self._set_metric(combo.currentData()))
+            self._metric_holder_v.addWidget(combo)
 
             self._metric_holder_v.addWidget(QLabel("LABEL OVERRIDE"))
-            li = QLineEdit(cfg.label)
-            li.textChanged.connect(
+            self._label_edit = QLineEdit(cfg.label)
+            self._label_edit.textChanged.connect(
                 lambda txt: self._state.update_device("oled", {"label": txt})
             )
-            self._metric_holder_v.addWidget(li)
+            self._metric_holder_v.addWidget(self._label_edit)
         else:
             self._metric_holder_v.addWidget(QLabel("METRICS TO CYCLE"))
-            grid = QGridLayout()
-            grid.setSpacing(6)
-            self._rotate_checks: list[tuple[str, QCheckBox]] = []
-            for i, key in enumerate(["cpu_temp", "gpu_temp", "cpu_pct",
-                                     "gpu_pct", "mem_pct", "fan_rpm"]):
-                cb = QCheckBox(METRIC_DISPLAY[key])
-                cb.setChecked(key in cfg.rotate_sources)
-                cb.toggled.connect(lambda _on, _k=key: self._sync_rotate_sources())
-                grid.addWidget(cb, i // 2, i % 2)
-                self._rotate_checks.append((key, cb))
-            self._metric_holder_v.addLayout(grid)
+            self._rotate_list = QListWidget()
+            self._rotate_list.setMinimumHeight(220)
+            for key in self._source_list(tuple(cfg.rotate_sources)):
+                item = QListWidgetItem(self._source_text(key))
+                item.setData(Qt.ItemDataRole.UserRole, key)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(Qt.CheckState.Checked if key in cfg.rotate_sources
+                                   else Qt.CheckState.Unchecked)
+                self._rotate_list.addItem(item)
+            self._rotate_list.itemChanged.connect(lambda _it: self._sync_rotate_sources())
+            self._metric_holder_v.addWidget(self._rotate_list)
 
             ivl = SliderRow(label="INTERVAL (sec)", minimum=1, maximum=10,
                             value=int(round(cfg.rotate_interval_s)), fmt="{v}s")
@@ -175,11 +185,19 @@ class OledPage(DevicePage):
             self._metric_holder_v.addWidget(ivl)
 
     def _set_metric(self, key: str) -> None:
-        self._state.update_device("oled", {"value_source": key})
-        self._render_hw_mode("single")  # refresh the on/off visuals
+        # The label follows the metric; the user can still override it after.
+        text = self._source_text(key)
+        self._state.update_device("oled", {"value_source": key, "label": text})
+        self._label_edit.blockSignals(True)
+        self._label_edit.setText(text)
+        self._label_edit.blockSignals(False)
 
     def _sync_rotate_sources(self) -> None:
-        sources = tuple(k for k, cb in self._rotate_checks if cb.isChecked())
+        sources = tuple(
+            self._rotate_list.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(self._rotate_list.count())
+            if self._rotate_list.item(i).checkState() == Qt.CheckState.Checked
+        )
         if not sources:
             return  # Empty list is invalid — config validation would reject
         self._state.update_device("oled", {"rotate_sources": sources})

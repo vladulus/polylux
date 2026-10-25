@@ -14,23 +14,10 @@ from PyQt6.QtWidgets import (
 )
 
 from polylux.config import RyujinLcdConfig
+from polylux.sensors.sources import available as available_sources, fan_card_names, label as source_label
 from polylux.ui.pages.base import DevicePage
 from polylux.ui.widgets.live_preview import RyujinLivePreview
 from polylux.ui.widgets.seg_button import SegButton
-
-
-def _monitor_sources() -> list[str]:
-    """Everything run_ryujin can show: live LHM temperatures, fan RPMs and
-    the special sources (see RyujinLcdConfig.monitor_slots)."""
-    out = ["liquid", "cpu_pct", "gpu_pct", "mem_pct"]
-    try:
-        from polylux.sensors.lhm import LHMSensors
-        s = LHMSensors()
-        out += sorted(s.temps())
-        out += [f"rpm:{f.name.lower()}" for f in s.fans() if f.rpm > 0]
-    except Exception:  # noqa: BLE001 — daemon down: specials only
-        pass
-    return out
 
 
 class RyujinPage(DevicePage):
@@ -75,18 +62,19 @@ class RyujinPage(DevicePage):
             v.addWidget(stretch)
         elif scene == "hardware_monitor":
             v.addWidget(QLabel("FOUR VALUES ON THE LCD — LABEL + SENSOR"))
-            sources = _monitor_sources()
+            sources = available_sources()
+            names = fan_card_names(self._state.snapshot().fans.fans)
             self._slot_widgets = []
             for label, source in cfg.monitor_slots:
                 row = QHBoxLayout()
                 lab = QLineEdit(label)
                 lab.setMaxLength(24)
                 src = QComboBox()
-                src.setEditable(True)
-                src.addItems(sources if source in sources else [source, *sources])
-                src.setCurrentText(source)
+                for key in (sources if source in sources else [source, *sources]):
+                    src.addItem(source_label(key, names), key)
+                src.setCurrentIndex(max(0, src.findData(source)))
                 lab.editingFinished.connect(self._save_slots)
-                src.currentTextChanged.connect(lambda _t: self._save_slots())
+                src.currentIndexChanged.connect(lambda _i: self._save_slots())
                 row.addWidget(lab, 2)
                 row.addWidget(src, 3)
                 v.addLayout(row)
@@ -106,7 +94,7 @@ class RyujinPage(DevicePage):
         return w
 
     def _save_slots(self) -> None:
-        slots = tuple((lab.text().strip() or src.currentText(), src.currentText().strip())
+        slots = tuple((lab.text().strip() or src.currentText(), src.currentData())
                       for lab, src in self._slot_widgets)
         self._state.update_device("ryujin_lcd", {"monitor_slots": slots})
 

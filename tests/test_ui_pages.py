@@ -144,3 +144,56 @@ def test_min_duty_raises_a_running_curve_but_not_zero():
     assert resolve_duty(fan, {"t": 30.0}) == 0.0       # stop stays stop
     assert resolve_duty(fan, {"t": 43.0}) == 25.0      # 16 % would not start it
     assert resolve_duty(fan, {"t": 50.0}) == 30.0
+
+
+def test_oled_offers_every_live_sensor(qtbot, qapp, state, monkeypatch):
+    """The OLED picker lists the six metrics plus every live sensor."""
+    from polylux.ui.pages import oled
+    monkeypatch.setattr(oled, "available_sources",
+                        lambda: ["cpu_pct", "gpu_pct", "mem_pct", "liquid", "vrm", "rpm:fan #2"])
+    p = oled.OledPage(state)
+    qtbot.addWidget(p)
+    p.set_scene("hardware_monitor")
+    p._render_hw_mode("rotate")
+    keys = [p._rotate_list.item(i).data(oled.Qt.ItemDataRole.UserRole)
+            for i in range(p._rotate_list.count())]
+    assert {"cpu_temp", "fan_rpm", "liquid", "vrm", "rpm:fan #2"} <= set(keys)
+    p._render_hw_mode("single")
+    p._set_metric("vrm")
+    assert state.snapshot().oled.value_source == "vrm"
+    assert state.snapshot().oled.label == "VRM"
+
+
+def test_oled_reader_uses_shared_sources_for_new_keys(monkeypatch):
+    from polylux.service import main
+
+    class FakeTemps:
+        def temps(self):
+            return {"vrm": 47.0}
+
+        def fans(self):
+            return []
+
+    monkeypatch.setattr(main, "_read_value_source", lambda s: f"legacy:{s}")
+    read = main._oled_reader(ServiceState.__new__(ServiceState), FakeTemps())
+    assert read("cpu_temp") == "legacy:cpu_temp"
+    assert read("vrm") == "47 °C"
+
+
+def test_shared_reader_ryujin_sources():
+    from polylux.sensors.sources import label, make_reader
+
+    class FakeTemps:
+        def temps(self):
+            return {}
+
+        def fans(self):
+            return []
+
+    st = {"liquid_c": 31.44, "rpm_1": 2100, "rpm_2": 1300, "aio_rpm": 990}
+    read = make_reader(FakeTemps(), ryujin=lambda: st)
+    assert [read(s) for s in ("liquid", "pump_rpm", "head_fan_rpm", "radiator_rpm")] == \
+        ["31.4℃", "2100rpm", "1300rpm", "990rpm"]
+    assert make_reader(FakeTemps(), ryujin=lambda: None)("pump_rpm") == "--"
+    assert label("rpm:fan #4", {"fan #4": "LOWER_L"}) == "LOWER_L RPM"
+    assert label("temperature #1") == "MOTHERBOARD"
