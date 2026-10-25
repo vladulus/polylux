@@ -75,6 +75,7 @@ ASUS_SERVICES = (
     "AsusCertService",
     "AsusFanControlService",
     "LightingService",
+    "ROG Live Service",   # the real service name; its exe is ROGLiveService.exe
     "ROGLiveService",
     "ROGLiveServiceV2",
 )
@@ -103,7 +104,7 @@ def _services_running(names: Iterable[str]) -> list[str]:
     """Return names of services that are currently Running. Read-only,
     no admin required. Names not found on the system are skipped."""
     names = list(names)
-    name_list = ",".join(names)
+    name_list = ",".join(f"'{n}'" for n in names)  # quoted: "ROG Live Service" has spaces
     script = (
         f"Get-Service -Name {name_list} -ErrorAction SilentlyContinue "
         f"| Where-Object {{ $_.Status -eq 'Running' }} "
@@ -128,7 +129,7 @@ def _services_not_already_disabled(names: Iterable[str]) -> list[str]:
     the services come back up after a Windows trigger / Defender action.
     """
     names = list(names)
-    name_list = ",".join(names)
+    name_list = ",".join(f"'{n}'" for n in names)  # quoted: "ROG Live Service" has spaces
     script = (
         f"Get-Service -Name {name_list} -ErrorAction SilentlyContinue "
         f"| Where-Object {{ $_.StartType -ne 'Disabled' }} "
@@ -165,7 +166,7 @@ def stop_services(names: Iterable[str] = ASUS_SERVICES,
         return True
     log.info("Running ASUS services that need stopping: %s", ", ".join(running))
 
-    name_list = ",".join(names)
+    name_list = ",".join(f"'{n}'" for n in names)  # quoted: "ROG Live Service" has spaces
     direct_script = f"Stop-Service -Name {name_list} -Force -ErrorAction Continue"
     if set_manual:
         # Only set Manual on services that aren't already Disabled — the
@@ -174,7 +175,7 @@ def stop_services(names: Iterable[str] = ASUS_SERVICES,
         to_manual = _services_not_already_disabled(names)
         if to_manual:
             manual_lines = " ; ".join(
-                f"Set-Service {n} -StartupType Manual -ErrorAction SilentlyContinue"
+                f"Set-Service '{n}' -StartupType Manual -ErrorAction SilentlyContinue"
                 for n in to_manual
             )
             direct_script += f" ; {manual_lines}"

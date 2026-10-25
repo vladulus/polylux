@@ -24,10 +24,11 @@ REM ---- 2. Stop + disable the supervising services. ----
 REM PowerShell Stop-Service is more robust than sc.exe — it handles the
 REM stop-pending state, waits for the SCM to acknowledge, and gives a
 REM clearer pass/fail outcome. Set-Service for the start type.
-set "SERVICES=ArmouryCrateService AsusCertService AsusFanControlService LightingService ROGLiveService ROGLiveServiceV2 asComSvc"
+REM ";"-separated: "ROG Live Service" (the AIO service) has spaces in its name.
+set "SERVICES=ArmouryCrateService;AsusCertService;AsusFanControlService;LightingService;ROG Live Service;ROGLiveService;ROGLiveServiceV2;asComSvc"
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$svcs = '%SERVICES%' -split ' '; ^
+  "$svcs = '%SERVICES%' -split ';'; ^
    foreach ($s in $svcs) { ^
      try { Stop-Service -Name $s -Force -ErrorAction Stop } catch {} ^
      try { Set-Service -Name $s -StartupType Disabled -ErrorAction Stop } catch {} ^

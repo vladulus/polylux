@@ -12,7 +12,7 @@ $procs = 'Aac3572MbHal_x86', 'Aac3572DramHal_x86', 'ArmouryCrate', 'ArmouryCrate
 Stop-Process -Name $procs -Force -ErrorAction SilentlyContinue
 
 $services = 'ArmouryCrateService', 'AsusCertService', 'AsusFanControlService',
-            'LightingService', 'ROGLiveService', 'ROGLiveServiceV2', 'asComSvc'
+            'LightingService', 'ROG Live Service', 'ROGLiveService', 'ROGLiveServiceV2', 'asComSvc'
 foreach ($s in $services) {
     if (-not (Get-Service -Name $s -ErrorAction SilentlyContinue)) { continue }
     try { Stop-Service -Name $s -Force -ErrorAction Stop } catch { Write-Host "stop $s failed: $_" }

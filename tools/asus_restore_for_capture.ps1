@@ -12,7 +12,7 @@ Start-Transcript -Path $log -Force | Out-Null
 Stop-Process -Name Polylux, OpenRGB -Force -ErrorAction SilentlyContinue
 
 $services = 'ArmouryCrateService', 'AsusCertService', 'AsusFanControlService',
-            'LightingService', 'ROGLiveService', 'ROGLiveServiceV2', 'asComSvc'
+            'LightingService', 'ROG Live Service', 'ROGLiveService', 'ROGLiveServiceV2', 'asComSvc'
 foreach ($s in $services) {
     if (-not (Get-Service -Name $s -ErrorAction SilentlyContinue)) { continue }
     Set-Service -Name $s -StartupType Automatic
