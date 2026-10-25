@@ -166,10 +166,20 @@ class RyujinLCD:
         ch = self._channel()
         p71, pf1, p72, p73, p7f = (p for p, _ in build_upload_prep_packets(image_bytes))
         ch.drain()
-        # The LCD keeps uploads in slots (AC: "up to 7"); when the slot is
-        # taken a write is refused (ee 13 10 01, ec 7f 02, no ee 14). How AC
-        # frees a slot is not decoded yet — ec 72 + ec 73 03 alone did not
-        # change free space (2026-10-25).
+        # AC first frees the slot it writes to (AIOFanSDK log: MediaDelete
+        # Type:0 index:1, then MediaTransfer Type:1 index:1): ec 72 01 <kind>
+        # <slot> + ec 73 03 -> ee 13 00 03. A 10 in the flags byte
+        # (ee 13 10 ..) is what every file operation answered while the LCD
+        # was wedged by the un-acked uploads of 2026-10-25; only a power
+        # cycle cleared it, so stop instead of making it worse.
+        ch.command(p72)
+        ch.write(_pad([0xEC, 0x73, 0x03]))
+        ev = ch.wait_for_event(0x13, 0x03, 3.0)
+        if ev[2] & 0x10:
+            raise RyujinLCDError("LCD refuses file operations (ee 13 10 03): "
+                                 "power the PC off fully, then retry")
+        time.sleep(0.5)
+        ch.drain()
         ch.command(p71)
         ch.command(pf1)
         ch.command(p72)

@@ -27,7 +27,7 @@ def _fit(img: Image.Image, stretch: bool, portrait: bool) -> Image.Image:
     return img.rotate(PORTRAIT_ROTATION, expand=True) if portrait else img
 
 
-PORTRAIT_ROTATION = 90   # degrees counter-clockwise; flip to -90 if upside down
+PORTRAIT_ROTATION = 270  # degrees counter-clockwise — AC rotates by 270 (AIOFanSDK log)
 
 
 def ryujin_image(path: str | Path, stretch: bool = False, portrait: bool = False) -> bytes:

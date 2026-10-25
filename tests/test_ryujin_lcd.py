@@ -81,5 +81,5 @@ def test_portrait_image_is_turned_into_the_landscape_buffer(tmp_path):
     im.save(src)
     out = Image.open(io.BytesIO(ryujin_image(src, portrait=True)))
     assert out.size == (320, 240)
-    # rotated 90° CCW: the top band ends up on the left edge
-    assert out.getpixel((5, 120))[0] > 200 and out.getpixel((300, 120))[0] < 60
+    # rotated 270° CCW (= 90° CW): the top band ends up on the right edge
+    assert out.getpixel((314, 120))[0] > 200 and out.getpixel((20, 120))[0] < 60

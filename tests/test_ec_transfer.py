@@ -45,7 +45,8 @@ def test_ryujin_upload_waits_for_every_ack():
     dev = FakeDevice()
     jpeg = bytes([0xFF, 0xD8, 0xFF]) + b"\0" * 9000        # 3 chunks
     _lcd(dev).upload_image(jpeg, RyujinSettings())
-    assert dev.log == ["ec71", "ecf1", "ec72", "ec73", "ec7f",
+    assert dev.log == ["ec72", "ec73",                     # free slot 1 (MediaDelete)
+                       "ec71", "ecf1", "ec72", "ec73", "ec7f",
                        "bulk4096", "bulk4096", "bulk4096",
                        "ec73", "ec5c", "ec5d", "ec51"]
 
@@ -80,3 +81,19 @@ def test_set_fans_bytes_match_full_speed_capture():
     lcd.hid_write = lambda p: (sent.append(bytes(p)), dev.write(p))
     lcd.set_fans(100, 100, 100)
     assert [p[:5].hex() for p in sent] == ["ec1a006464", "ec210000ff"]
+
+
+def test_wedged_lcd_stops_before_writing():
+    """ee 13 10 03 to the delete = the state only a power cycle cleared."""
+    from polylux.drivers.ryujin_lcd.driver import RyujinLCDError
+    dev = FakeDevice()
+    real_write = dev.write
+
+    def write(pkt):
+        real_write(pkt)
+        if pkt[:3] == b"\xec\x73\x03":
+            dev.inbox[-1] = b"\xee\x13\x10\x03" + b"\0" * 61
+    dev.write = write
+    with pytest.raises(RyujinLCDError, match="power the PC off"):
+        _lcd(dev).upload_image(bytes([0xFF, 0xD8, 0xFF]) + b"\0" * 100, RyujinSettings())
+    assert "ec7f" not in dev.log
