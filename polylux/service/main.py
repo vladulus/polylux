@@ -513,8 +513,10 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
                 temp = temps.temps().get(rcfg.aio_temp_source.lower())
                 aio = interpolate_curve(list(rcfg.aio_curve), temp) if temp is not None else 100.0
                 target = (rcfg.pump_pct, rcfg.embedded_fan_pct, round(aio))
+                # Sent every tick like AC: when the host stays quiet the
+                # pump-head fan went to ~4800 rpm on its own (2026-10-25).
+                lcd.set_fans(*target)
                 if target != fans_sent:
-                    lcd.set_fans(*target)
                     log.info("ryujin fans: pump %d%% embedded %d%% aio %d%% (%s=%s)",
                              *target, rcfg.aio_temp_source, temp)
                     fans_sent = target
