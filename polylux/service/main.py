@@ -418,7 +418,7 @@ def run_fans(state: ServiceState, stop: threading.Event) -> None:
         if fcfg.enabled and fcfg.fans:
             try:
                 temps = {k.lower(): v for k, v in sensors.temps().items()}
-                apply_all(fcfg.fans, temps)
+                apply_all(state.effective_fans(), temps)
             except Exception as ex:
                 log.warning("fan runner tick failed: %s", ex)
         stop.wait(max(0.5, fcfg.update_seconds))
@@ -612,7 +612,7 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
                     _ryujin_autotune(lcd, state)
                 status = lcd.read_status()
                 t = {**temps.temps(), "liquid": status["liquid_c"]}
-                by_id = {f.sensor_id: f for f in state.snapshot().fans.fans}
+                by_id = {f.sensor_id: f for f in state.effective_fans()}
 
                 def duty(sid, legacy_auto):
                     # Same modes and curves as the motherboard fans; AUTO has

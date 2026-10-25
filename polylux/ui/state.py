@@ -40,6 +40,9 @@ class ServiceState:
         self._debounce = debounce_seconds
         # Set by the Fans page AUTO TUNING button, consumed by run_ryujin.
         self.ryujin_autotune = threading.Event()
+        # sensor_id -> mode, applied by the fan runners on top of the config
+        # and never saved: calibration's temporary 'full' must not outlive it.
+        self._fan_overrides: dict[str, str] = {}
         self._lock = threading.RLock()
         self._revision = 0
         self._status: dict[str, dict] = {
@@ -66,6 +69,18 @@ class ServiceState:
         """Return current config. Read-only — callers should not mutate."""
         with self._lock:
             return self._cfg
+
+    def set_fan_overrides(self, overrides: dict[str, str]) -> None:
+        with self._lock:
+            self._fan_overrides = dict(overrides)
+
+    def effective_fans(self) -> list:
+        """fans.fans with the runtime overrides applied (what to drive now)."""
+        from dataclasses import replace
+        with self._lock:
+            ov = self._fan_overrides
+            return [replace(f, mode=ov[f.sensor_id]) if f.sensor_id in ov else f
+                    for f in self._cfg.fans.fans]
 
     @property
     def revision(self) -> int:

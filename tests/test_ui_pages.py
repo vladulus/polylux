@@ -90,3 +90,32 @@ def test_banner_shows_ryujin_auto_tuning_progress(qtbot, qapp, tmp_path):
     st.set_frame("ryujin_fans", frame)
     p._refresh_live()
     assert p._cal_banner.isHidden()
+
+
+def test_calibration_full_is_runtime_only(tmp_path, monkeypatch):
+    """Calibration drives every fan at full through a runtime override and
+    never writes 'full' into the saved config (a kill mid-calibration used
+    to leave the board fans on full with max_rpm 0)."""
+    from polylux.config import load
+    from polylux.ui.pages import fans as fp
+    cfgp = tmp_path / "polylux.yaml"
+    cfgp.write_text(
+        "fans:\n  fans:\n  - sensor_id: /lpc/nct6798d/0/control/0\n    name: A\n"
+        "    mode: curve\n", encoding="utf-8")
+    st = ServiceState(cfg=load(cfgp), yaml_path=cfgp)
+    seen = {}
+
+    def tick(_):
+        seen["effective"] = [f.mode for f in st.effective_fans()]
+        seen["saved"] = [f.mode for f in st.snapshot().fans.fans]
+
+    monkeypatch.setattr(fp, "CALIBRATION_SECONDS", 1)
+    monkeypatch.setattr(fp, "fan_post", lambda *a: True)
+    monkeypatch.setattr(fp, "_rpm_snapshot", lambda: {"/lpc/nct6798d/0/control/0": 1500})
+    monkeypatch.setattr(fp, "_max_rpm_snapshot", lambda: {})
+    monkeypatch.setattr(fp.time, "sleep", lambda s: None)
+    done = {}
+    fp._CalibrationThread(st, tick, done.update).run()
+    assert seen == {"effective": ["full"], "saved": ["curve"]}
+    assert [f.mode for f in st.effective_fans()] == ["curve"]
+    assert done == {"/lpc/nct6798d/0/control/0": 1500}

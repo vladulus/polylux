@@ -150,17 +150,16 @@ def _max_rpm_snapshot(url: str = f"{DAEMON_URL}/data.json") -> dict[str, int]:
 # ---------------------------------------------------------------------------
 
 class _CalibrationThread(threading.Thread):
-    """Force every fan to ``mode='full'`` in config for CALIBRATION_SECONDS,
-    then read peak RPM from the daemon and restore prior modes.
+    """Run every fan at 'full' for CALIBRATION_SECONDS, then read peak RPM
+    from the daemon.
 
-    Mutating config (rather than POSTing directly) avoids a race with the
-    `run_fans` thread which would otherwise re-apply the user-configured
-    mode every few seconds and clobber the calibration override.
+    'full' is a runtime override (ServiceState.set_fan_overrides) that the
+    fan runners apply every tick, so they don't clobber the calibration, and
+    it is never saved: a crash or kill mid-calibration leaves the user's
+    modes intact (it used to save 'full' into polylux.yaml, 2026-10-25).
 
-    Also: reset the chip's running ``Max`` field at start by reading
-    fresh after the 100% blast, not during. Old Max values from prior
-    runs survive across daemon restarts, so without this we'd just
-    report whatever historical peak the chip happens to remember.
+    Peak RPM is sampled live during the window, not only from the chip's
+    running Max, which survives from before calibration.
     """
 
     def __init__(
@@ -174,42 +173,19 @@ class _CalibrationThread(threading.Thread):
         self._on_tick = on_tick
         self._on_done = on_done
 
-    def _set_all_modes(self, mode_by_sid: dict[str, str]) -> None:
-        fans = list(self._state.snapshot().fans.fans)
-        out = []
-        for f in fans:
-            new_mode = mode_by_sid.get(f.sensor_id, f.mode)
-            kwargs = {**asdict(f), "mode": new_mode}
-            if "curve" in kwargs and isinstance(kwargs["curve"], list):
-                kwargs["curve"] = tuple(tuple(p) for p in kwargs["curve"])
-            out.append(FanConfig(**kwargs))
-        try:
-            self._state.update_device("fans", {"fans": out})
-        except Exception:
-            log.exception("calibration: state update failed")
-
     def run(self) -> None:
         fans = list(self._state.snapshot().fans.fans)
         if not fans:
             self._on_done({})
             return
-        prior_modes = {f.sensor_id: f.mode for f in fans}
         try:
-            # Phase 1: force everyone to 'full' via config — runner picks
-            # this up on its next tick. The runner enforces it every
-            # cycle so the chip stays at 100% throughout the window.
-            self._set_all_modes({f.sensor_id: "full" for f in fans})
-
-            # Phase 2: also kick the daemon directly so we don't wait
-            # for the next runner tick (could be up to update_seconds).
+            self._state.set_fan_overrides({f.sensor_id: "full" for f in fans})
+            # Kick the daemon directly so we don't wait for the next runner tick.
             for f in fans:
                 if not is_ryujin(f.sensor_id):
                     fan_post(DAEMON_URL, f.sensor_id,
                              {"mode": "software", "value": 100}, 2.0)
 
-            # Phase 3: count down 1 Hz, sampling live RPMs so we have a
-            # measured peak that doesn't depend on whatever stale Max
-            # the chip happens to remember from before calibration.
             live_peaks: dict[str, int] = {f.sensor_id: 0 for f in fans}
             for remaining in range(CALIBRATION_SECONDS, 0, -1):
                 try:
@@ -217,34 +193,27 @@ class _CalibrationThread(threading.Thread):
                 except Exception:
                     log.exception("calibration tick callback failed")
                 try:
-                    snap = _rpm_snapshot()
-                    for sid, rpm in snap.items():
+                    for sid, rpm in _rpm_snapshot().items():
                         if rpm > live_peaks.get(sid, 0):
                             live_peaks[sid] = rpm
                 except Exception:
                     pass
                 time.sleep(1.0)
 
-            # Phase 4: combine our live samples with the chip's Max
-            # (in case it spun briefly between our polls), then keep
-            # the higher value per fan.
             chip_maxes = _max_rpm_snapshot()
             maxes = {
                 sid: max(live_peaks.get(sid, 0), chip_maxes.get(sid, 0))
                 for sid in set(live_peaks) | set(chip_maxes)
             }
-
-            # Phase 5: restore prior modes BEFORE firing done callback
-            # so the UI reflects the final state immediately.
-            self._set_all_modes(prior_modes)
-
-            try:
-                self._on_done(maxes)
-            except Exception:
-                log.exception("calibration done callback failed")
         except Exception:
-            log.exception("calibration thread crashed; attempting mode restore")
-            self._set_all_modes(prior_modes)
+            log.exception("calibration thread crashed")
+            maxes = {}
+        finally:
+            self._state.set_fan_overrides({})
+        try:
+            self._on_done(maxes)
+        except Exception:
+            log.exception("calibration done callback failed")
 
 
 # ---------------------------------------------------------------------------
