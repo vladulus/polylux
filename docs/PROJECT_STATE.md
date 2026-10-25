@@ -655,9 +655,32 @@ action each:
     b12,b13  64 14 → 00 00   Standby Mode ON → OFF [Ghicesc: standby
                              brightness + timeout share these bytes]
 
-`ec 21 00 00 NN` (NN 00→ff in 10 steps, from the earlier `ryujin_USBPcap1`
-capture) is an unidentified slider — [Ghicesc] pump/fan duty from the
-Fan Control tab. `ec 99 / a0 / a1 / dc` are periodic status reads.
+More from `ryujin_warn_USBPcap1.pcap` (markers in `ryujin_warn_markers.txt`):
+
+    Clock (24h):        ec 11 c6 10 25 07 00 01 28 05  [Ghicesc: time/date set]
+                        ec 5d 00 01 08 00 00 05, ec 51 08
+    Default Animation:  ec 5d 00 01 14 00 <idx> 05, ec 51 14 00 <idx>
+                        (idx 02 = third thumbnail; the second showed up as
+                        ec 5c b10/b15 = 01 when picked in the Settings dialog)
+    Temperature Warning: nothing reaches the device when the threshold or the
+                        switch changes (only an unchanged ec 5c) — [Probabil]
+                        AC watches the temperature itself and switches the
+                        screen.
+
+Fans — AC drives them in software. Every ~4 s, whatever the mode, it sends:
+
+    ec 9a                       read
+    ec 1a 00 <b3> <b4>          b3 0x64 → 0x32 when Pump was set to 50%;
+                                b4 moved while the Embedded Micro fan was
+                                changed (1e/13/64/00)
+    ec 21 00 00 <duty>          AIO Fan Controller duty 00..ff, varies with
+                                CPU temperature in Smart Mode
+
+Full Speed preset ends as `ec 1a 00 64 64` + `ec 21 00 00 ff`; switching
+presets also sent `ec 82` and `ec af` once. [Ghicesc] b3 = pump %, b4 =
+embedded fan %; the per-step markers overlap because Vlad set each fan
+and put it back to Smart inside one step. So Polylux has to run the
+curve itself, the same way it already does for the motherboard headers.
 
 ### 9.4 Aura RGB — protocol decoded but write blocked
 
