@@ -23,6 +23,15 @@ public sealed class SensorCollector : BackgroundService
     private readonly object _treeLock = new();
     private byte[]? _cachedJson;
 
+    // What Polylux asked for, per control. LHM's Control only writes the chip
+    // when the requested mode/value differs from the one it remembers, and
+    // Nct677X.SetControl silently drops the write when the ISA-bus mutex isn't
+    // free within 10 ms (LHM 0.9.6 Control.cs / Nct677X.cs). So once the chip
+    // ends up elsewhere, repeated identical POSTs never reach it. Refresh()
+    // compares the register readback with this map and rewrites on mismatch.
+    private readonly Dictionary<string, float> _requested = new();
+    private readonly object _controlLock = new();
+
     public SensorCollector(ILogger<SensorCollector> log, DaemonOptions opts)
     {
         _log = log;
@@ -102,14 +111,22 @@ public sealed class SensorCollector : BackgroundService
             {
                 case "default":
                 case "auto":
-                    sensor.Control.SetDefault();
+                    lock (_controlLock)
+                    {
+                        _requested.Remove(sensorId);
+                        sensor.Control.SetDefault();
+                    }
                     _log.LogInformation("Fan {id} → default (BIOS control)", sensorId);
                     return true;
                 case "software":
                 case "manual":
                     if (value is null) return false;
                     var clamped = Math.Clamp(value.Value, 0f, 100f);
-                    sensor.Control.SetSoftware(clamped);
+                    lock (_controlLock)
+                    {
+                        _requested[sensorId] = clamped;
+                        sensor.Control.SetSoftware(clamped);
+                    }
                     _log.LogInformation("Fan {id} → software {pct:0.0}%", sensorId, clamped);
                     return true;
                 default:
@@ -147,11 +164,37 @@ public sealed class SensorCollector : BackgroundService
         return null;
     }
 
+    /// <summary>
+    /// Rewrite every software-controlled channel whose PWM register no longer
+    /// holds what was requested (dropped write, or another writer on the chip).
+    /// </summary>
+    private void EnforceRequestedControls()
+    {
+        lock (_controlLock)
+        {
+            foreach (var (sid, want) in _requested)
+            {
+                var sensor = FindSensorByIdentifier(sid);
+                if (sensor?.Control is null || sensor.Value is not float got) continue;
+                // One PWM step is 100/255 = 0.4 %; 2 % is clear of rounding.
+                if (Math.Abs(got - want) <= 2f) continue;
+                _log.LogWarning("Fan {id}: chip reads {got:0.0}% but {want:0.0}% was requested; rewriting",
+                                sid, got, want);
+                // A different value is the only way past LHM's change check;
+                // the nudge is at most one PWM step, and each call rewrites the
+                // manual-mode register too.
+                sensor.Control.SetSoftware(want >= 50f ? want - 0.1f : want + 0.1f);
+                sensor.Control.SetSoftware(want);
+            }
+        }
+    }
+
     private void Refresh()
     {
         try
         {
             foreach (var hw in _computer.Hardware) hw.Accept(_visitor);
+            EnforceRequestedControls();
             var bytes = BuildJsonBytes();
             lock (_treeLock) _cachedJson = bytes;
         }
