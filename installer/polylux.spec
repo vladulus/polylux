@@ -27,7 +27,7 @@ metadata_datas = (
     + copy_metadata('packaging')
     + copy_metadata('build')
     + copy_metadata('typing_extensions')
-    + copy_metadata('charset-normalizer')
+    + copy_metadata('chardet')         # py-utlx >= 2.5 (was charset-normalizer)
 )
 
 # Grab every submodule of libusb so the platform-specific loader (e.g.
