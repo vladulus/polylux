@@ -198,25 +198,25 @@ class LiveDashOLED:
                 f"image_bytes too large: {len(image_bytes)} > 100KB max"
             )
 
-        from polylux.drivers import ec_transfer as ec
+        from polylux.drivers.ec_transfer import Channel
 
         chip = self.chip
-        cmd = lambda p: ec.command(chip.hid_write, chip.hid_read, p)
+        ch = Channel(chip.hid_write, chip.hid_read)
         p72, p51, p73, p7f = build_image_prep_packets(len(image_bytes))
         end, mode, status, settings = build_image_commit_packets(on_when_off, rotate_180)
         with chip.lock:
-            ec.drain(chip.hid_read)
-            cmd(p72)
-            cmd(p51)
-            cmd(p73)
-            ec.wait_for(chip.hid_read, b"\xee\x13\x00\x01", 2.0)
-            cmd(p7f)
-            ec.bulk_upload(chip.bulk_write, chip.hid_read, image_bytes)
-            cmd(end)
-            ec.wait_for(chip.hid_read, b"\xee\x13\x00\xff", 3.0)
-            cmd(mode)
-            cmd(status)
-            cmd(settings)
+            ch.drain()
+            ch.command(p72)
+            ch.command(p51)
+            ch.command(p73)
+            ch.wait_for(b"\xee\x13\x00\x01", 2.0)
+            ch.command(p7f)
+            ch.bulk_upload(chip.bulk_write, image_bytes)
+            ch.command(end)
+            ch.wait_for(b"\xee\x13\x00\xff", 3.0)
+            ch.command(mode)
+            ch.command(status)
+            ch.command(settings)
         self._text_mode_armed = False
 
     def send_raw_hid(self, packet: bytes) -> None:

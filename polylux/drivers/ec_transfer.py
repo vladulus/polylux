@@ -1,21 +1,24 @@
 """Handshaked `ec` command / bulk upload, shared by chip 1A21 (OLED) and
 the Ryujin LCD (1988).
 
-Both devices answer every `ec XX` HID command with an `ec XX ...` input
-report and announce transfer progress with `ee` events (USBPcap of AC
-6.5.7, 2026-10-25):
+Both devices answer every `ec XX` HID command with an `ec (XX & 7f)`
+input report and announce transfer progress with `ee` events (USBPcap of
+AC 6.5.7, 2026-10-25):
 
-    ec 73 01          -> ec 73 .., then ee 13 00 01   ready to receive
+    ec 73 01          -> ec 73 .. and ee 13 00 01     ready to receive
     BULK 4096 B       -> ee 14 00 00 10               next chunk please
     last BULK chunk   -> ee 14 00 80 ..               all received
-    ec 73 ff          -> ec 73 .., then ee 13 00 ff   stored
+    ec 73 ff          -> ec 73 .. and ee 13 00 ff     stored
 
 AC waits for each of these before sending more. Sending the chunks back
 to back hung the Ryujin firmware until it re-enumerated (2026-10-25).
+The order of a reply and its event is not fixed, so reports that don't
+match what we wait for are kept, not dropped.
 """
 from __future__ import annotations
 
 import time
+from collections import deque
 from typing import Callable, Optional
 
 CHUNK = 4096
@@ -25,45 +28,55 @@ class TransferError(RuntimeError):
     pass
 
 
-def drain(read: Callable[[int], bytes]) -> None:
-    """Drop queued input reports (acks of earlier fire-and-forget writes).
+class Channel:
+    """write/read pair plus the reports read while waiting for others."""
 
-    1 ms, not 0: the `hid` package treats timeout 0 as a blocking read.
-    """
-    while read(1):
-        pass
+    def __init__(self, write: Callable[[bytes], None], read: Callable[[int], bytes]):
+        self.write, self.read = write, read
+        self.pending: deque[bytes] = deque()
 
+    def drain(self) -> None:
+        """Drop queued reports (acks of earlier fire-and-forget writes).
 
-def wait_for(read: Callable[[int], bytes], head: bytes, timeout: float) -> bytes:
-    """Read input reports until one starts with `head`."""
-    end = time.monotonic() + timeout
-    while True:
-        left = end - time.monotonic()
-        if left <= 0:
-            raise TransferError(f"no {head.hex(' ')} reply within {timeout:.1f}s")
-        rep = read(max(1, int(left * 1000)))
-        if rep and rep[:len(head)] == head:
-            return rep
+        1 ms, not 0: the `hid` package treats timeout 0 as a blocking read.
+        """
+        self.pending.clear()
+        while self.read(1):
+            pass
 
+    def wait_for(self, head: bytes, timeout: float) -> bytes:
+        for rep in list(self.pending):
+            if rep[:len(head)] == head:
+                self.pending.remove(rep)
+                return rep
+        end = time.monotonic() + timeout
+        while True:
+            left = end - time.monotonic()
+            if left <= 0:
+                raise TransferError(f"no {head.hex(' ')} reply within {timeout:.1f}s")
+            rep = self.read(max(1, int(left * 1000)))
+            if not rep:
+                continue
+            if rep[:len(head)] == head:
+                return rep
+            self.pending.append(rep)
 
-def command(write: Callable[[bytes], None], read: Callable[[int], bytes],
-            pkt: bytes, timeout: float = 1.0) -> bytes:
-    """Send one `ec XX` command and return its reply, tagged `ec (XX & 7f)`:
-    reads have the top bit set and the reply drops it (ec 99 -> ec 19,
-    ec dc -> ec 5c, ec f1 -> ec 71)."""
-    write(pkt)
-    return wait_for(read, bytes([pkt[0], pkt[1] & 0x7F]), timeout)
+    def command(self, pkt: bytes, timeout: float = 1.0) -> bytes:
+        """Send one `ec XX` command and return its `ec (XX & 7f)` reply:
+        reads have the top bit set and the reply drops it (ec 99 -> ec 19,
+        ec dc -> ec 5c, ec f1 -> ec 71)."""
+        self.write(pkt)
+        return self.wait_for(bytes([pkt[0], pkt[1] & 0x7F]), timeout)
 
-
-def bulk_upload(bulk_write: Callable[[bytes], int], read: Callable[[int], bytes],
-                data: bytes, timeout: float = 3.0,
-                progress: Optional[Callable[[int, int], None]] = None) -> None:
-    """Send `data` in 4 KB chunks, each after the device's ee 14 request."""
-    padded = data + b"\x00" * (-len(data) % CHUNK)
-    for off in range(0, len(padded), CHUNK):
-        n = bulk_write(padded[off:off + CHUNK])
-        if n != CHUNK:
-            raise TransferError(f"bulk write short at {off}: {n}/{CHUNK}")
-        wait_for(read, b"\xee\x14", timeout)
-        if progress:
-            progress(off + CHUNK, len(padded))
+    def bulk_upload(self, bulk_write: Callable[[bytes], int], data: bytes,
+                    timeout: float = 3.0,
+                    progress: Optional[Callable[[int, int], None]] = None) -> None:
+        """Send `data` in 4 KB chunks, each after the device's ee 14 request."""
+        padded = data + b"\x00" * (-len(data) % CHUNK)
+        for off in range(0, len(padded), CHUNK):
+            n = bulk_write(padded[off:off + CHUNK])
+            if n != CHUNK:
+                raise TransferError(f"bulk write short at {off}: {n}/{CHUNK}")
+            self.wait_for(b"\xee\x14", timeout)
+            if progress:
+                progress(off + CHUNK, len(padded))

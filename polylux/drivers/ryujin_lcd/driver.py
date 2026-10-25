@@ -146,38 +146,40 @@ class RyujinLCD:
             raise RyujinLCDError("LCD not open")
         return bytes(self._hid_dev.read(HID_PACKET_SIZE, timeout_ms))
 
+    def _channel(self):
+        from polylux.drivers.ec_transfer import Channel
+        if getattr(self, "_ch", None) is None:
+            self._ch = Channel(lambda p: self.hid_write(p), lambda t: self.hid_read(t))
+        return self._ch
+
     def command(self, pkt: bytes, timeout: float = 1.0) -> bytes:
         """Send one ec command and wait for its reply, like AC does."""
-        from polylux.drivers import ec_transfer
-        return ec_transfer.command(self.hid_write, self.hid_read, pkt, timeout)
+        return self._channel().command(pkt, timeout)
 
     # --- public API ---
 
     def upload_image(self, image_bytes: bytes, settings: "RyujinSettings") -> None:
         """Upload a 320x240 JPEG or GIF and show it (AC's Image mode).
 
-        Every step waits for the device's reply (ec_transfer docstring);
-        replies drop the top bit of the opcode (ec f1 -> ec 71).
+        Every step waits for the device's reply (ec_transfer docstring).
         """
-        from polylux.drivers import ec_transfer as ec
-
+        ch = self._channel()
         p71, pf1, p72, p73, p7f = (p for p, _ in build_upload_prep_packets(image_bytes))
-        ec.drain(self.hid_read)
-        self.command(p71)
-        self.command(pf1)
-        self.command(p72)
-        self.command(p73)
-        ec.wait_for(self.hid_read, b"\xee\x13\x00\x01", 2.0)
-        self.command(p7f)
-        ec.bulk_upload(self.bulk_write, self.hid_read, image_bytes)
-        self.command(_pad([0xEC, 0x73, 0xFF]))
-        ec.wait_for(self.hid_read, b"\xee\x13\x00\xff", 3.0)
+        ch.drain()
+        ch.command(p71)
+        ch.command(pf1)
+        ch.command(p72)
+        ch.command(p73)
+        ch.wait_for(b"\xee\x13\x00\x01", 2.0)
+        ch.command(p7f)
+        ch.bulk_upload(lambda d: self.bulk_write(d), image_bytes)
+        ch.command(_pad([0xEC, 0x73, 0xFF]))
+        ch.wait_for(b"\xee\x13\x00\xff", 3.0)
         for pkt in (settings.packet(), *MODE_IMAGE):
-            self.command(pkt)
+            ch.command(pkt)
 
     def apply_settings(self, settings: "RyujinSettings") -> None:
-        from polylux.drivers import ec_transfer
-        ec_transfer.drain(self.hid_read)
+        self._channel().drain()
         self.command(settings.packet())
 
     def set_fans(self, pump_pct: int, embedded_pct: int, aio_pct: float) -> None:

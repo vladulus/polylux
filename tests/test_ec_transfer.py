@@ -51,8 +51,24 @@ def test_ryujin_upload_waits_for_every_ack():
 def test_missing_chunk_ack_stops_the_upload():
     dev = FakeDevice(ack_chunks=False)
     with pytest.raises(ec.TransferError):
-        ec.bulk_upload(dev.bulk, dev.read, b"x" * 9000, timeout=0.05)
+        ec.Channel(dev.write, dev.read).bulk_upload(dev.bulk, b"x" * 9000, timeout=0.05)
     assert dev.log == ["bulk4096"]
+
+
+def test_event_before_reply_is_kept():
+    """Live 2026-10-25: ee 13 00 01 arrived before the ec 73 reply and the
+    old code dropped it while waiting, then timed out."""
+    dev = FakeDevice()
+    real_write = dev.write
+
+    def write(pkt):
+        real_write(pkt)
+        if pkt[:3] == b"\xec\x73\x01":
+            dev.inbox.insert(-2, dev.inbox.pop())    # event first, reply second
+    dev.write = write
+    jpeg = bytes([0xFF, 0xD8, 0xFF]) + b"\0" * 100
+    _lcd(dev).upload_image(jpeg, RyujinSettings())
+    assert dev.log[-3:] == ["ec5c", "ec5d", "ec51"]
 
 
 def test_set_fans_bytes_match_full_speed_capture():
