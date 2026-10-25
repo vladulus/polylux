@@ -57,6 +57,17 @@ CALIBRATION_SECONDS = 30
 # Daemon helpers
 # ---------------------------------------------------------------------------
 
+# NCT6798D channel -> header on the ROG MAXIMUS Z690 EXTREME, found by
+# spinning one channel at a time with Vlad naming the fan (2026-10-25).
+# CPU_OPT follows CPU_FAN (one PWM, no tach of its own). 5–7 had nothing.
+_HEADER_NAMES = {
+    "/lpc/nct6798d/0/control/0": "CHA_FAN1",
+    "/lpc/nct6798d/0/control/1": "CPU_FAN",
+    "/lpc/nct6798d/0/control/2": "CHA_FAN2",
+    "/lpc/nct6798d/0/control/3": "RAD_FAN1",
+}
+
+
 def _discover_controllable_fans(url: str = f"{DAEMON_URL}/data.json") -> list[dict]:
     """Walk daemon /data.json for (control, fan) pairs that look plugged in.
 
@@ -114,7 +125,7 @@ def _discover_controllable_fans(url: str = f"{DAEMON_URL}/data.json") -> list[di
             continue
         pairs.append({
             "sensor_id": csid,
-            "name": cmeta["name"] or csid.rsplit("/", 1)[-1],
+            "name": _HEADER_NAMES.get(csid) or cmeta["name"] or csid.rsplit("/", 1)[-1],
             "fan_sensor_id": fsid,
             "current_rpm": fan_now,
             "max_rpm": fan_max,
