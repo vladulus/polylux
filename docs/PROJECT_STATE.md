@@ -667,20 +667,27 @@ More from `ryujin_warn_USBPcap1.pcap` (markers in `ryujin_warn_markers.txt`):
                         AC watches the temperature itself and switches the
                         screen.
 
-Fans — AC drives them in software. Every ~4 s, whatever the mode, it sends:
+Fans — AC drives them in software, and only after Auto Tuning (Vlad:
+fan control did nothing until he ran it). Decoded from
+`ryujin_autotune_USBPcap1.pcap`, both directions:
 
-    ec 9a                       read
-    ec 1a 00 <b3> <b4>          b3 0x64 → 0x32 when Pump was set to 50%;
-                                b4 moved while the Embedded Micro fan was
-                                changed (1e/13/64/00)
-    ec 21 00 00 <duty>          AIO Fan Controller duty 00..ff, varies with
-                                CPU temperature in Smart Mode
+    ec 9a          → ec 1a 00 00 <v>          read back the ec 1a value
+    ec 1a 00 <v>   (v 0x22..0x2b in Smart)    [Ghicesc] pump / embedded fan %
+    ec 21 00 00 <d>                           AIO Fan Controller duty 00..ff
+    ec a1          → ec 21 00 00 <d>          read back the duty
+    ec a0          → ec 20 00 00 00 <rpmA LE16> <rpmB LE16>   AIO fan rpm
+    ec 99          → ec 19 00 <t_int> <t_frac> <rpm LE16>     e.g. 1d 09 =
+                     29.9 °C [Probabil liquid temp], 0x0528 = 1320 rpm
 
-Full Speed preset ends as `ec 1a 00 64 64` + `ec 21 00 00 ff`; switching
-presets also sent `ec 82` and `ec af` once. [Ghicesc] b3 = pump %, b4 =
-embedded fan %; the per-step markers overlap because Vlad set each fan
-and put it back to Smart inside one step. So Polylux has to run the
-curve itself, the same way it already does for the motherboard headers.
+Auto Tuning = duty 00, 19, 33 … e5, ff (0..100 % in 10 % steps), ~3.5 s
+each, reading ec a0 after every step: 600 → 1920 rpm on Vlad's fans,
+the table AC shows (600 … 1890). Then the Smart loop resumes: every ~4 s
+ec 9a, ec 1a <v>, ec 21 <duty from the curve vs CPU temp>.
+Full Speed preset = ec 1a 00 64 64 + ec 21 00 00 ff; preset switch also
+sent ec 82 and ec af once.
+
+Polylux has to calibrate and run the curve itself, as it already does
+for the motherboard headers.
 
 ### 9.4 Aura RGB — protocol decoded but write blocked
 
