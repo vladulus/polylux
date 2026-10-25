@@ -277,6 +277,10 @@ class FanConfig:
     mode: str = "auto"                # auto / off / silent / medium / full / curve
     temp_source: str = "cpu package"  # which key from sensor_daemon.temps() drives the curve
     max_rpm: int = 0                  # measured during one-shot calibration; gauge scale
+    # Lowest duty at which the fan starts from standstill (Auto Tuning). A
+    # duty above 0 but below it would leave the fan stopped, so it is raised
+    # to this; 0 = not measured.
+    min_duty: float = 0.0
     # 4 anchor points (temp_c, duty_pct). Linear interp between, clamped
     # to first/last duty outside the range. Used when mode="curve".
     curve: tuple[tuple[float, float], ...] = (
@@ -465,6 +469,7 @@ def load(path: str | Path = DEFAULT_CONFIG_PATH) -> PolyluxConfig:
             fan.mode = str(entry.get("mode", fan.mode))
             fan.temp_source = str(entry.get("temp_source", fan.temp_source))
             fan.max_rpm = int(entry.get("max_rpm", fan.max_rpm) or 0)
+            fan.min_duty = float(entry.get("min_duty", fan.min_duty) or 0)
             curve_raw = entry.get("curve")
             if isinstance(curve_raw, list) and curve_raw:
                 pts = []

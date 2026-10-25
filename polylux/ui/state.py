@@ -40,9 +40,10 @@ class ServiceState:
         self._debounce = debounce_seconds
         # Set by the Fans page AUTO TUNING button, consumed by run_ryujin.
         self.ryujin_autotune = threading.Event()
-        # sensor_id -> mode, applied by the fan runners on top of the config
-        # and never saved: calibration's temporary 'full' must not outlive it.
-        self._fan_overrides: dict[str, str] = {}
+        # sensor_id -> mode, or a fixed duty %, applied by the fan runners on
+        # top of the config and never saved: calibration's temporary settings
+        # must not outlive it.
+        self._fan_overrides: dict[str, str | float] = {}
         self._lock = threading.RLock()
         self._revision = 0
         self._status: dict[str, dict] = {
@@ -70,7 +71,7 @@ class ServiceState:
         with self._lock:
             return self._cfg
 
-    def set_fan_overrides(self, overrides: dict[str, str]) -> None:
+    def set_fan_overrides(self, overrides: dict[str, str | float]) -> None:
         with self._lock:
             self._fan_overrides = dict(overrides)
 
@@ -79,8 +80,15 @@ class ServiceState:
         from dataclasses import replace
         with self._lock:
             ov = self._fan_overrides
-            return [replace(f, mode=ov[f.sensor_id]) if f.sensor_id in ov else f
-                    for f in self._cfg.fans.fans]
+            out = []
+            for f in self._cfg.fans.fans:
+                o = ov.get(f.sensor_id)
+                if isinstance(o, str):
+                    f = replace(f, mode=o)
+                elif o is not None:     # fixed duty: a flat one-point curve, no floor
+                    f = replace(f, mode="curve", curve=((0.0, float(o)),), min_duty=0.0)
+                out.append(f)
+            return out
 
     @property
     def revision(self) -> int:

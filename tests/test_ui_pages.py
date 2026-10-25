@@ -106,16 +106,41 @@ def test_calibration_full_is_runtime_only(tmp_path, monkeypatch):
     seen = {}
 
     def tick(_):
-        seen["effective"] = [f.mode for f in st.effective_fans()]
-        seen["saved"] = [f.mode for f in st.snapshot().fans.fans]
+        if not seen:      # first tick = the full-speed phase
+            seen["effective"] = [f.mode for f in st.effective_fans()]
+            seen["saved"] = [f.mode for f in st.snapshot().fans.fans]
+
+    sid = "/lpc/nct6798d/0/control/0"
+    duty_now = {}
+
+    def post(url, s, payload, timeout):
+        duty_now[s] = payload["value"]
+        return True
+
+    def rpm():
+        # Starts from standstill only at 20 %.
+        d = duty_now.get(sid, 100)
+        return {sid: 1500 if d == 100 else (400 if d >= 20 else 0)}
 
     monkeypatch.setattr(fp, "CALIBRATION_SECONDS", 1)
-    monkeypatch.setattr(fp, "fan_post", lambda *a: True)
-    monkeypatch.setattr(fp, "_rpm_snapshot", lambda: {"/lpc/nct6798d/0/control/0": 1500})
+    monkeypatch.setattr(fp, "STOP_SECONDS", 1)
+    monkeypatch.setattr(fp, "STEP_SECONDS", 1)
+    monkeypatch.setattr(fp, "fan_post", post)
+    monkeypatch.setattr(fp, "_rpm_snapshot", rpm)
     monkeypatch.setattr(fp, "_max_rpm_snapshot", lambda: {})
     monkeypatch.setattr(fp.time, "sleep", lambda s: None)
-    done = {}
-    fp._CalibrationThread(st, tick, done.update).run()
-    assert seen == {"effective": ["full"], "saved": ["curve"]}
+    done = []
+    fp._CalibrationThread(st, tick, done.append).run()
+    assert seen["effective"] == ["full"] and seen["saved"] == ["curve"]
     assert [f.mode for f in st.effective_fans()] == ["curve"]
-    assert done == {"/lpc/nct6798d/0/control/0": 1500}
+    assert done == [({sid: 1500}, {sid: 20.0})]
+
+
+def test_min_duty_raises_a_running_curve_but_not_zero():
+    from polylux.config import FanConfig
+    from polylux.sensors.fan_control import resolve_duty
+    fan = FanConfig(sensor_id="x", mode="curve", temp_source="t", min_duty=25.0,
+                    curve=((35.0, 0.0), (50.0, 30.0)))
+    assert resolve_duty(fan, {"t": 30.0}) == 0.0       # stop stays stop
+    assert resolve_duty(fan, {"t": 43.0}) == 25.0      # 16 % would not start it
+    assert resolve_duty(fan, {"t": 50.0}) == 30.0

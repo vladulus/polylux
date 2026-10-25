@@ -81,6 +81,13 @@ _last_temp: dict[str, tuple[float, float]] = {}   # source -> (°C, monotonic ti
 
 
 def resolve_duty(fan: FanConfig, temps: dict[str, float]) -> Optional[float]:
+    duty = _resolve_duty(fan, temps)
+    if duty is not None and 0 < duty < fan.min_duty:
+        return fan.min_duty
+    return duty
+
+
+def _resolve_duty(fan: FanConfig, temps: dict[str, float]) -> Optional[float]:
     """Translate the fan's mode + current temperature reading into a PWM%.
 
     Returns ``None`` when the runner should NOT send a software override

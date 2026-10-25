@@ -497,6 +497,9 @@ def _ryujin_autotune(lcd, state: ServiceState) -> None:
         publish(st, duties)
         return rows
 
+    def first_spinning(rows, key):
+        return next((float(p) for p, r in rows if r[key] > 0), 0.0)
+
     def moved(rows, keys):
         return max(keys, key=lambda k: max(r[k] for _, r in rows) - min(r[k] for _, r in rows))
 
@@ -518,11 +521,15 @@ def _ryujin_autotune(lcd, state: ServiceState) -> None:
     k = moved(rows, both)
     log.info("ryujin auto tuning pump-head fan (%s): %s", k, fmt(rows, k))
     tops[RYUJIN_HEAD_FAN] = max(r[k] for _, r in rows)
+    # The head fan stops at low duty (0 rpm at 10 % on 25.10); the radiator
+    # fans and the pump never do (pump floor is PUMP_MIN_PCT anyway).
+    mins = {RYUJIN_HEAD_FAN: first_spinning(rows, k)}
 
     fans = []
     for f in state.snapshot().fans.fans:
         if tops.get(f.sensor_id, 0) > 0:
-            kw = {**asdict(f), "max_rpm": tops[f.sensor_id]}
+            kw = {**asdict(f), "max_rpm": tops[f.sensor_id],
+                  "min_duty": mins.get(f.sensor_id, f.min_duty)}
             kw["curve"] = tuple(tuple(p) for p in kw["curve"])
             f = FanConfig(**kw)
         fans.append(f)

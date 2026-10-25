@@ -51,6 +51,12 @@ PRESET_PILLS = [
 
 DAEMON_URL = "http://127.0.0.1:8085"
 CALIBRATION_SECONDS = 30
+# Start-duty sweep after the full-speed phase: fans stopped for STOP_SECONDS,
+# then raised step by step from standstill (start duty is higher than the
+# duty at which a spinning fan stalls, and curves start fans from 0).
+START_DUTY_STEPS = (5, 10, 15, 20, 25, 30, 35, 40, 50, 60)
+STOP_SECONDS = 6
+STEP_SECONDS = 4
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +157,7 @@ def _max_rpm_snapshot(url: str = f"{DAEMON_URL}/data.json") -> dict[str, int]:
 
 class _CalibrationThread(threading.Thread):
     """Run every fan at 'full' for CALIBRATION_SECONDS, then read peak RPM
-    from the daemon.
+    from the daemon; then find each board fan's start duty (START_DUTY_STEPS).
 
     'full' is a runtime override (ServiceState.set_fan_overrides) that the
     fan runners apply every tick, so they don't clobber the calibration, and
@@ -166,7 +172,7 @@ class _CalibrationThread(threading.Thread):
         self,
         state: ServiceState,
         on_tick,        # callable(seconds_remaining: int)
-        on_done,        # callable(maxes: dict[str, int])
+        on_done,        # callable((maxes: dict[str, int], start_duties: dict[str, float]))
     ):
         super().__init__(daemon=True, name="fan-calibration")
         self._state = state
@@ -186,8 +192,10 @@ class _CalibrationThread(threading.Thread):
                     fan_post(DAEMON_URL, f.sensor_id,
                              {"mode": "software", "value": 100}, 2.0)
 
+            board = [f.sensor_id for f in fans if not is_ryujin(f.sensor_id)]
+            total = CALIBRATION_SECONDS + STOP_SECONDS + STEP_SECONDS * len(START_DUTY_STEPS)
             live_peaks: dict[str, int] = {f.sensor_id: 0 for f in fans}
-            for remaining in range(CALIBRATION_SECONDS, 0, -1):
+            for remaining in range(total, total - CALIBRATION_SECONDS, -1):
                 try:
                     self._on_tick(remaining)
                 except Exception:
@@ -205,15 +213,43 @@ class _CalibrationThread(threading.Thread):
                 sid: max(live_peaks.get(sid, 0), chip_maxes.get(sid, 0))
                 for sid in set(live_peaks) | set(chip_maxes)
             }
+            starts = self._start_duties(board, total - CALIBRATION_SECONDS)
         except Exception:
             log.exception("calibration thread crashed")
-            maxes = {}
+            maxes, starts = {}, {}
         finally:
             self._state.set_fan_overrides({})
         try:
-            self._on_done(maxes)
+            self._on_done((maxes, starts))
         except Exception:
             log.exception("calibration done callback failed")
+
+    def _start_duties(self, sids: list[str], remaining: int) -> dict[str, float]:
+        def hold(seconds: int, duty: float) -> dict[str, int]:
+            nonlocal remaining
+            self._state.set_fan_overrides({sid: duty for sid in sids})
+            for sid in sids:
+                fan_post(DAEMON_URL, sid, {"mode": "software", "value": duty}, 2.0)
+            for _ in range(seconds):
+                try:
+                    self._on_tick(remaining)
+                except Exception:
+                    log.exception("calibration tick callback failed")
+                remaining -= 1
+                time.sleep(1.0)
+            return _rpm_snapshot()
+
+        hold(STOP_SECONDS, 0.0)
+        starts: dict[str, float] = {}
+        for duty in START_DUTY_STEPS:
+            rpms = hold(STEP_SECONDS, float(duty))
+            for sid in sids:
+                if sid not in starts and rpms.get(sid, 0) > 0:
+                    starts[sid] = float(duty)
+            if len(starts) == len(sids):
+                break
+        log.info("fans: start duty %s", {s.rsplit("/", 1)[-1]: d for s, d in starts.items()})
+        return starts
 
 
 # ---------------------------------------------------------------------------
@@ -660,13 +696,15 @@ class FansPage(QWidget):
     def _on_cal_tick(self, remaining: int) -> None:
         self._cal_countdown.setText(f"{remaining}s remaining")
 
-    def _on_cal_done(self, maxes: dict) -> None:
+    def _on_cal_done(self, result) -> None:
+        maxes, starts = result
         fans = list(self._state.snapshot().fans.fans)
         updated = 0
         for i, fan in enumerate(fans):
-            m = int(maxes.get(fan.sensor_id, 0))
-            if m > 0 and m != fan.max_rpm:
-                kwargs = {**asdict(fan), "max_rpm": m}
+            m = int(maxes.get(fan.sensor_id, 0)) or fan.max_rpm
+            s = starts.get(fan.sensor_id, fan.min_duty)
+            if (m, s) != (fan.max_rpm, fan.min_duty):
+                kwargs = {**asdict(fan), "max_rpm": m, "min_duty": s}
                 if "curve" in kwargs and isinstance(kwargs["curve"], list):
                     kwargs["curve"] = tuple(tuple(p) for p in kwargs["curve"])
                 fans[i] = FanConfig(**kwargs)
