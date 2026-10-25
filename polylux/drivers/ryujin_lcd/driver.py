@@ -169,20 +169,23 @@ class RyujinLCD:
         ch.command(p71)
         ch.command(pf1)
         ch.command(p72)
-        ch.command(p73)
+        # "ready" is ee 13 xx 01 (xx 00 or 10 seen live); the ec 73 reply
+        # itself sometimes never comes, so only the event is awaited.
+        ch.write(p73)
         try:
-            ch.wait_for(b"\xee\x13\x00\x01", 2.0)
+            ch.wait_for_event(0x13, 0x01, 2.0)
         except Exception:
             # Seen live: after an aborted upload the LCD stays in "receiving"
             # and never says ready again until ec 73 ff closes that session.
-            ch.command(_pad([0xEC, 0x73, 0xFF]))
+            ch.write(_pad([0xEC, 0x73, 0xFF]))
+            time.sleep(0.5)
             ch.drain()
-            ch.command(p73)
-            ch.wait_for(b"\xee\x13\x00\x01", 2.0)
+            ch.write(p73)
+            ch.wait_for_event(0x13, 0x01, 2.0)
         ch.command(p7f)
         ch.bulk_upload(lambda d: self.bulk_write(d), image_bytes)
-        ch.command(_pad([0xEC, 0x73, 0xFF]))
-        ch.wait_for(b"\xee\x13\x00\xff", 3.0)
+        ch.write(_pad([0xEC, 0x73, 0xFF]))
+        ch.wait_for_event(0x13, 0xFF, 3.0)
         for pkt in (settings.packet(), *MODE_IMAGE):
             ch.command(pkt)
 

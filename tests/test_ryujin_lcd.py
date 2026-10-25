@@ -72,3 +72,14 @@ def test_monitor_packet_matches_capture():
         "ec5300" "4350552054656d702e" + "00" * 27 + "34352e30e28483")
     assert build_monitor_packet(0, "CPU Temp.", "45.0℃")[:len(captured)] == captured
     assert MONITOR_LAYOUT_QUAD[:6].hex() == "ec5200030202"
+
+
+def test_portrait_image_is_turned_into_the_landscape_buffer(tmp_path):
+    src = tmp_path / "tall.png"
+    im = Image.new("RGB", (240, 320), "black")
+    im.paste((255, 0, 0), (0, 0, 240, 40))            # red band on top
+    im.save(src)
+    out = Image.open(io.BytesIO(ryujin_image(src, portrait=True)))
+    assert out.size == (320, 240)
+    # rotated 90° CCW: the top band ends up on the left edge
+    assert out.getpixel((5, 120))[0] > 200 and out.getpixel((300, 120))[0] < 60

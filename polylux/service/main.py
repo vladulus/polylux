@@ -463,7 +463,8 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
             log.info("ryujin: apply scene=%s image=%s %s", rcfg.scene, rcfg.image_path, settings)
             try:
                 if rcfg.scene == "image" and rcfg.image_path:
-                    lcd.upload_image(ryujin_image(rcfg.image_path, rcfg.image_stretch), settings)
+                    lcd.upload_image(ryujin_image(rcfg.image_path, rcfg.image_stretch,
+                                                  rcfg.portrait), settings)
                 elif rcfg.scene == "animation":
                     lcd.apply_settings(settings)
                     lcd.show_animation(rcfg.animation)

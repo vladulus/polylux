@@ -45,19 +45,28 @@ class Channel:
             pass
 
     def wait_for(self, head: bytes, timeout: float) -> bytes:
+        return self._wait(lambda r: r[:len(head)] == head, head.hex(" "), timeout)
+
+    def wait_for_event(self, code: int, state: int, timeout: float) -> bytes:
+        """ee <code> <flags> <state>: the flags byte varies (00, 10 seen)."""
+        return self._wait(lambda r: len(r) > 3 and r[0] == 0xEE and r[1] == code
+                          and r[3] == state, f"ee {code:02x} ?? {state:02x}", timeout)
+
+    def _wait(self, match, what: str, timeout: float) -> bytes:
         for rep in list(self.pending):
-            if rep[:len(head)] == head:
+            if match(rep):
                 self.pending.remove(rep)
                 return rep
         end = time.monotonic() + timeout
         while True:
             left = end - time.monotonic()
             if left <= 0:
-                raise TransferError(f"no {head.hex(' ')} reply within {timeout:.1f}s")
+                seen = " ".join(r[:4].hex() for r in self.pending) or "nothing"
+                raise TransferError(f"no {what} reply within {timeout:.1f}s (got: {seen})")
             rep = self.read(max(1, int(left * 1000)))
             if not rep:
                 continue
-            if rep[:len(head)] == head:
+            if match(rep):
                 return rep
             self.pending.append(rep)
 
