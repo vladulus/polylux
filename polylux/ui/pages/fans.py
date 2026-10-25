@@ -538,6 +538,9 @@ class FansPage(QWidget):
 
     _cal_tick = pyqtSignal(int)        # cross-thread: seconds_remaining
     _cal_done = pyqtSignal(object)     # cross-thread: dict[sensor_id -> max_rpm]
+    # Config listeners fire on whichever thread changed the config (the
+    # calibration thread does); widgets may only be built on the GUI thread.
+    _config_changed = pyqtSignal()
 
     def __init__(self, state: ServiceState) -> None:
         super().__init__()
@@ -612,7 +615,8 @@ class FansPage(QWidget):
         self._timer.timeout.connect(self._refresh_live)
         self._timer.start(1000)
 
-        state.add_listener(self._rebuild_cards)
+        self._config_changed.connect(self._rebuild_cards)
+        state.add_listener(self._config_changed.emit)
         self._cal_tick.connect(self._on_cal_tick)
         self._cal_done.connect(self._on_cal_done)
 

@@ -53,3 +53,22 @@ def test_ryujin_fans_get_regular_cards(qtbot, qapp, tmp_path):
     assert {"ryujin:pump", "ryujin:head_fan", "ryujin:radiator"} <= set(p._fan_to_card)
     p._refresh_live()
     assert p._fan_to_card["ryujin:pump"]._gauge._value == 2760
+
+
+def test_fan_cards_survive_config_change_from_worker_thread(qtbot, qapp, tmp_path):
+    """Auto Tuning changes the config from its own thread; the cards must be
+    rebuilt on the GUI thread, not orphaned (page went empty, 2026-10-25)."""
+    import threading
+    from polylux.config import load
+    from polylux.ui.pages.fans import FansPage
+    cfgp = tmp_path / "polylux.yaml"
+    cfgp.write_text("ryujin_lcd:\n  enabled: true\n", encoding="utf-8")
+    st = ServiceState(cfg=load(cfgp), yaml_path=cfgp)
+    p = FansPage(st)
+    qtbot.addWidget(p)
+    fans = list(st.snapshot().fans.fans)
+    t = threading.Thread(target=lambda: st.update_device("fans", {"fans": fans}))
+    t.start()
+    t.join()
+    qtbot.waitUntil(lambda: len(p._fan_to_card) == len(fans))
+    assert all(c.parent() is p._cards_holder for c in p._cards)
