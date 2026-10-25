@@ -47,6 +47,9 @@ RestartApplications=no
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayName={#MyAppName} {#MyAppVersion}
+; Shown before Finish: the BIOS settings Polylux needs (Q-Fan off on the
+; headers it drives, Armoury Crate auto-install off).
+InfoAfterFile=after-install.txt
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

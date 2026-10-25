@@ -38,8 +38,9 @@
    values in manual mode (mode 0x00) and switches back to SmartFan (0x40).
    Measured 25.10: 17 daemon corrections in 10 min after a reboot with the
    ASUS software already gone; 0 in 10 min after Vlad disabled Q-Fan on
-   CHA_FAN1 / CPU_FAN / CHA_FAN2 / RAD_FAN1. Not yet in the installer docs
-   or the README — add it there.
+   CHA_FAN1 / CPU_FAN / CHA_FAN2 / RAD_FAN1. In the README ("BIOS
+   settings Polylux needs") and on the installer's page before Finish
+   (`installer/after-install.txt`).
 2. **Ryujin image/GIF display.** Uploads complete but the panel keeps
    the hardware monitor or refuses (`ec 7f 02`). AC's sequence after the
    upload (`SetProfile multi_media_player`) is in

@@ -117,6 +117,21 @@ What the installer does:
   6. Launches Polylux immediately in the tray so you don't have to
      reboot to start using it.
 
+### BIOS settings Polylux needs
+
+Two settings in the BIOS (Advanced Mode, F7):
+
+  - **Monitor → Q-Fan Configuration → Q-Fan Control = Disabled** on
+    every fan header you want Polylux to drive. With Q-Fan on, the
+    board firmware keeps rewriting the fan chip behind Polylux's back:
+    its own duty values, and switches back to its own curve. Measured
+    on a ROG MAXIMUS Z690 EXTREME: 17 overrides in 10 minutes with
+    Q-Fan on, none with it off. The fans run at full speed from
+    power-on until Polylux starts, then follow your curves.
+  - **Tool → ASUS Armoury Crate → Download & Install ARMOURY CRATE
+    app = Disabled.** Otherwise Windows reinstalls Armoury Crate on
+    the next boot after you remove it.
+
 Build from source (developers):
 
 ```bash

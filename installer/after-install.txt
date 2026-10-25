@@ -1,0 +1,16 @@
+Two BIOS settings Polylux needs (BIOS Advanced Mode, F7):
+
+1. Monitor > Q-Fan Configuration > Q-Fan Control = Disabled
+   on every fan header you want Polylux to control.
+
+   With Q-Fan on, the motherboard firmware keeps overwriting the fan
+   chip behind Polylux's back, and your fan curves won't hold. The fans
+   run at full speed from power-on until Polylux starts, then follow
+   your curves.
+
+2. Tool > ASUS Armoury Crate > Download & Install ARMOURY CRATE app
+   = Disabled.
+
+   Otherwise Windows reinstalls Armoury Crate by itself on the next boot.
+
+After changing them, press F10 to save and reboot.
