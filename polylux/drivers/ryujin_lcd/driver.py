@@ -225,8 +225,8 @@ class RyujinLCD:
         f = self.command(_pad([0xEC, 0x9A]))
         return {
             "liquid_c": s[3] + s[4] / 10,                       # [Probabil] liquid temp
-            "rpm_1": int.from_bytes(s[5:7], "little"),          # [Ghicesc] pump
-            "rpm_2": int.from_bytes(s[7:9], "little"),          # [Ghicesc] embedded fan
+            "rpm_1": int.from_bytes(s[5:7], "little"),          # pump (Auto Tuning sweep 25.10)
+            "rpm_2": int.from_bytes(s[7:9], "little"),          # pump-head fan (same sweep)
             "aio_rpm": int.from_bytes(a[5:7], "little"),
             "pump_pct": f[4], "embedded_pct": f[5],
         }
