@@ -47,7 +47,11 @@
    `scratch/captures/ryujin_files_USBPcap*.pcap` — decode it, no AC needed.
 3. **Radiator fan staging.** Both radiator fans share one Ryujin PWM;
    staging needs one moved to a free board header (#5–#7) — Vlad's call.
-4. **Installer** (`installer/Polylux.iss`) not rebuilt since July; the
+4. **Ryujin fans when Polylux isn't running.** The Ryujin holds the
+   last duty (no curve of its own, measured 25.10). Options: Polylux sets
+   safe values on exit; or the sensor daemon (a service, always on) takes
+   over the Ryujin fan loop. Not decided.
+5. **Installer** (`installer/Polylux.iss`) not rebuilt since July; the
    PyInstaller step works again (chardet fix, 25.10).
 
 ## Run modes

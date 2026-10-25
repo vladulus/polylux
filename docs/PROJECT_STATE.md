@@ -699,6 +699,13 @@ ec 9a, ec 1a <v>, ec 21 <duty from the curve vs CPU temp>.
 Full Speed preset = ec 1a 00 64 64 + ec 21 00 00 ff; preset switch also
 sent ec 82 and ec af once.
 
+The Ryujin has no curve of its own: it holds the last ec 1a / ec 21
+values until the host sends new ones. Measured 2026-10-25 with Polylux
+closed and only read commands sent: liquid 31.3 → 43.7 °C over 2 min of
+full CPU load, pump 44 %, head fan 36 %, radiator ~990 rpm unchanged the
+whole time. So the liquid curve exists only while Polylux (or AC's
+asus_framework loop) runs; if it stops, cooling stays at the last duty.
+
 Polylux has to calibrate and run the curve itself, as it already does
 for the motherboard headers.
 
