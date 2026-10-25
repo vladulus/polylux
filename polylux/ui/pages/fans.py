@@ -595,6 +595,9 @@ class FansPage(QWidget):
         self._cards_grid = QGridLayout(self._cards_holder)
         self._cards_grid.setSpacing(14)
         self._cards_grid.setContentsMargins(0, 0, 0, 0)
+        # Pack the fixed-size cards top-left instead of spreading the
+        # columns/rows over the whole page (big gaps with 7 cards).
+        self._cards_grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         outer.addWidget(self._cards_holder, 1)
         outer.addStretch(0)
 
@@ -714,7 +717,7 @@ class FansPage(QWidget):
         self._cards.clear()
         self._fan_to_card.clear()
         fans = self._state.snapshot().fans.fans
-        cols = 3
+        cols = 4   # 4 x 220 px cards + spacing fit the 1280 px window
         for i, fan in enumerate(fans):
             card = _FanGaugeCard(self._state, i)
             self._cards_grid.addWidget(card, i // cols, i % cols)
