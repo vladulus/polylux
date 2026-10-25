@@ -26,8 +26,11 @@ class TransferError(RuntimeError):
 
 
 def drain(read: Callable[[int], bytes]) -> None:
-    """Drop queued input reports (acks of earlier fire-and-forget writes)."""
-    while read(0):
+    """Drop queued input reports (acks of earlier fire-and-forget writes).
+
+    1 ms, not 0: the `hid` package treats timeout 0 as a blocking read.
+    """
+    while read(1):
         pass
 
 
