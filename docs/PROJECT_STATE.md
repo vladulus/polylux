@@ -757,7 +757,8 @@ AniMe Matrix "When system is in sleep, hibernate or soft off states" → OFF
     ec 44 01 02 ..
 
 Ryujin "Standby Mode" → OFF: only `ec 5c` with b12,b13 64 14 → 00 00
-(same as the first Ryujin capture). Both not yet verified by a power-off.
+(same as the first Ryujin capture). Verified by a power-off 2026-10-25:
+Matrix and Ryujin both stay dark with the PC off (Vlad).
 The first Matrix attempt failed in AC with F-1031 while AacMbHal was
 being re-created every ~7 s (01:45–01:50, cause unknown); after a
 power cycle the save went through.
