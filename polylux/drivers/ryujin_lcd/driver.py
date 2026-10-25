@@ -170,7 +170,15 @@ class RyujinLCD:
         ch.command(pf1)
         ch.command(p72)
         ch.command(p73)
-        ch.wait_for(b"\xee\x13\x00\x01", 2.0)
+        try:
+            ch.wait_for(b"\xee\x13\x00\x01", 2.0)
+        except Exception:
+            # Seen live: after an aborted upload the LCD stays in "receiving"
+            # and never says ready again until ec 73 ff closes that session.
+            ch.command(_pad([0xEC, 0x73, 0xFF]))
+            ch.drain()
+            ch.command(p73)
+            ch.wait_for(b"\xee\x13\x00\x01", 2.0)
         ch.command(p7f)
         ch.bulk_upload(lambda d: self.bulk_write(d), image_bytes)
         ch.command(_pad([0xEC, 0x73, 0xFF]))
