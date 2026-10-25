@@ -776,6 +776,16 @@ The first Matrix attempt failed in AC with F-1031 while AacMbHal was
 being re-created every ~7 s (01:45–01:50, cause unknown); after a
 power cycle the save went through.
 
+### 9.4.0b Aura enable (ec 38) — 2026-10-25
+
+`ec 38 01 01` + `ec 38 00 01` is what AC sends when Aura Sync goes from
+Dark to ON. With Aura Sync left on Dark, the controller keeps the LEDs
+disabled across reboots and ignores OpenRGB (Vlad: static red via OpenRGB
+did nothing; after these two packets it lit). Polylux sends them at start
+when aura_rgb is enabled (power_off_state.aura_enable). [Probabil] this is
+also the "AC turns RGB on with BIOS RGB disabled" path of §9.4.1 — not
+tested with the BIOS switch off.
+
 ### 9.4.1 BIOS RGB toggle = hardware power cut (Vlad's verification 2026-05-12)
 
 Vlad's BIOS has the "Aura RGB" toggle Disabled by default (his preference

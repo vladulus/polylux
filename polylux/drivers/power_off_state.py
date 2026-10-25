@@ -30,14 +30,21 @@ AURA_SHUTDOWN_OFF = (
     _pad([0xEC, 0x3F, 0x55]),
 )
 
+# What AC sends when Aura Sync is switched ON (shutdown_effect capture).
+# Without it the LEDs ignored OpenRGB: the controller kept the disabled
+# state AC left behind while Aura Sync was "Dark" (2026-10-25).
+AURA_ENABLE = (
+    _pad([0xEC, 0x38, 0x01, 0x01]),
+    _pad([0xEC, 0x38, 0x00, 0x01]),
+)
+
 MATRIX_S5_OFF = (
     _pad([0xEC, 0x42, 0x02, 0x00]),
     _pad([0xEC, 0x44, 0x01, 0x02]),
 )
 
 
-def aura_shutdown_off() -> None:
-    """Shutdown effect = black on the motherboard Aura controller (18F3)."""
+def _aura_write(packets) -> None:
     import hid
 
     paths = [d["path"] for d in hid.enumerate(AURA_VID, AURA_PID)
@@ -47,11 +54,21 @@ def aura_shutdown_off() -> None:
     dev = hid.device()
     dev.open_path(paths[0])
     try:
-        for pkt in AURA_SHUTDOWN_OFF:
+        for pkt in packets:
             if dev.write(pkt) < 0:
                 raise RuntimeError(f"Aura write failed: {dev.error()}")
     finally:
         dev.close()
+
+
+def aura_shutdown_off() -> None:
+    """Shutdown effect = black on the motherboard Aura controller (18F3)."""
+    _aura_write(AURA_SHUTDOWN_OFF)
+
+
+def aura_enable() -> None:
+    """Re-enable the LEDs on the Aura controller so OpenRGB can drive them."""
+    _aura_write(AURA_ENABLE)
 
 
 def matrix_s5_off(chip) -> None:

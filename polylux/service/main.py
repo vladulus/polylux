@@ -746,6 +746,12 @@ def main() -> int:
     # OpenRGB runs in user mode → spawn directly.
     external.ensure_sensor_daemon()
     if cfg.aura_rgb.enabled:
+        from polylux.drivers import power_off_state
+        try:
+            power_off_state.aura_enable()
+            log.info("aura: controller LEDs enabled (ec 38)")
+        except Exception as ex:
+            log.warning("aura: enable failed: %s", ex)
         external.launch_openrgb()
 
     chip = None
