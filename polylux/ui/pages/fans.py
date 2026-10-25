@@ -732,6 +732,14 @@ class FansPage(QWidget):
     def _refresh_live(self) -> None:
         rpms = _rpm_snapshot()
         aio = self._state.last_frame("ryujin_fans")
+        tuning = aio.get("tuning") if aio else None
+        if not (self._cal_thread is not None and self._cal_thread.is_alive()):
+            # The board calibration owns the banner while it runs; the Ryujin
+            # sweep (run_ryujin) takes it for the rest of Auto Tuning.
+            self._cal_banner.setVisible(bool(tuning))
+            if tuning:
+                self._cal_text.setText(f"Auto Tuning the Ryujin: {tuning}")
+                self._cal_countdown.setText("")
         if aio:
             rpms.update({"ryujin:pump": aio["rpm_1"], "ryujin:head_fan": aio["rpm_2"],
                          "ryujin:radiator": aio["aio_rpm"]})

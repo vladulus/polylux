@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import urllib.parse
 import urllib.request
 from typing import Iterable, Optional
@@ -75,6 +76,9 @@ def is_ryujin(sensor_id: str) -> bool:
 # as "Temperature #1".
 TEMP_ALIASES = {"motherboard": "temperature #1"}
 
+TEMP_HOLD_S = 30.0
+_last_temp: dict[str, tuple[float, float]] = {}   # source -> (°C, monotonic time)
+
 
 def resolve_duty(fan: FanConfig, temps: dict[str, float]) -> Optional[float]:
     """Translate the fan's mode + current temperature reading into a PWM%.
@@ -87,11 +91,22 @@ def resolve_duty(fan: FanConfig, temps: dict[str, float]) -> Optional[float]:
         return None
     if mode == "curve":
         src = fan.temp_source.lower()
-        t = temps.get(TEMP_ALIASES.get(src, src))
-        if t is None:
-            log.warning("fan %s: temp source %r not available, falling back to silent",
-                        fan.name or fan.sensor_id, fan.temp_source)
-            return FanConfig.PRESET_DUTY["silent"]
+        key = TEMP_ALIASES.get(src, src)
+        t = temps.get(key)
+        now = time.monotonic()
+        if t is not None:
+            _last_temp[key] = (t, now)
+        else:
+            # A sensor gap (daemon restart, LHM hiccup) must not slow the
+            # pump or the fans down: hold the last reading for a while, then
+            # run the curve's top duty until the sensor is back.
+            last = _last_temp.get(key)
+            if last is not None and now - last[1] <= TEMP_HOLD_S:
+                t = last[0]
+            else:
+                log.warning("fan %s: temp source %r not available, running the curve's top duty",
+                            fan.name or fan.sensor_id, fan.temp_source)
+                return max((float(d) for _, d in fan.curve), default=100.0)
         return interpolate_curve(fan.curve, t)
     preset = FanConfig.PRESET_DUTY.get(mode)
     if preset is None:

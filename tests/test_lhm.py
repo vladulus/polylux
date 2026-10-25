@@ -101,3 +101,20 @@ def test_motherboard_source_maps_to_systin():
     fan = FanConfig(sensor_id="/lpc/nct6798d/0/control/0", mode="curve",
                     temp_source="motherboard", curve=((30.0, 0.0), (50.0, 100.0)))
     assert resolve_duty(fan, {"temperature #1": 40.0}) == 50.0
+
+
+def test_curve_fan_holds_last_temp_then_runs_curve_top_on_sensor_gap(monkeypatch):
+    """A missing temperature must never slow a fan down (the pump fell to
+    'silent' during a daemon restart)."""
+    from polylux.config import FanConfig
+    from polylux.sensors import fan_control as fc
+    clock = [1000.0]
+    monkeypatch.setattr(fc.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(fc, "_last_temp", {})
+    fan = FanConfig(sensor_id="ryujin:pump", name="AIO PUMP", mode="curve",
+                    temp_source="cpu package", curve=((30, 35), (50, 50), (85, 100)))
+    assert fc.resolve_duty(fan, {"cpu package": 50.0}) == 50.0
+    clock[0] += 10
+    assert fc.resolve_duty(fan, {}) == 50.0          # gap: last reading held
+    clock[0] += fc.TEMP_HOLD_S
+    assert fc.resolve_duty(fan, {}) == 100.0         # long gap: curve top

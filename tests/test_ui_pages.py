@@ -72,3 +72,21 @@ def test_fan_cards_survive_config_change_from_worker_thread(qtbot, qapp, tmp_pat
     t.join()
     qtbot.waitUntil(lambda: len(p._fan_to_card) == len(fans))
     assert all(c.parent() is p._cards_holder for c in p._cards)
+
+
+def test_banner_shows_ryujin_auto_tuning_progress(qtbot, qapp, tmp_path):
+    from polylux.config import load
+    from polylux.ui.pages.fans import FansPage
+    cfgp = tmp_path / "polylux.yaml"
+    cfgp.write_text("ryujin_lcd:\n  enabled: true\n", encoding="utf-8")
+    st = ServiceState(cfg=load(cfgp), yaml_path=cfgp)
+    p = FansPage(st)
+    qtbot.addWidget(p)
+    frame = {"liquid_c": 30.0, "rpm_1": 2000, "rpm_2": 1500, "aio_rpm": 900,
+             "pump_target": 60, "head_target": 30, "aio_pct": 30}
+    st.set_frame("ryujin_fans", {**frame, "tuning": "pump 60 %"})
+    p._refresh_live()
+    assert not p._cal_banner.isHidden() and "pump 60 %" in p._cal_text.text()
+    st.set_frame("ryujin_fans", frame)
+    p._refresh_live()
+    assert p._cal_banner.isHidden()

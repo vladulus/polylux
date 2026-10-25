@@ -473,13 +473,22 @@ def _ryujin_autotune(lcd, state: ServiceState) -> None:
     from polylux.config import FanConfig
     from polylux.sensors.fan_control import RYUJIN_HEAD_FAN, RYUJIN_PUMP, RYUJIN_RADIATOR
 
-    def sweep(steps, fans_at, keys):
+    def publish(st, duties, tuning=None):
+        frame = {**st, "pump_target": duties[0], "head_target": duties[1], "aio_pct": duties[2]}
+        if tuning:
+            frame["tuning"] = tuning      # the Fans page shows it in its banner
+        state.set_frame("ryujin_fans", frame)
+
+    def sweep(label, steps, fans_at, keys):
         rows = []
         for pct in steps:
-            lcd.set_fans(*fans_at(pct))
+            duties = fans_at(pct)
+            lcd.set_fans(*duties)
             time.sleep(3.5)
             st = lcd.read_status()
+            publish(st, duties, f"{label} {pct} %")
             rows.append((pct, {k: st[k] for k in keys}))
+        publish(st, duties)
         return rows
 
     def moved(rows, keys):
@@ -489,17 +498,17 @@ def _ryujin_autotune(lcd, state: ServiceState) -> None:
         return ", ".join(f"{p}%={r[key]}" for p, r in rows)
 
     tops = {}
-    rows = sweep(range(0, 101, 10), lambda p: (100, 30, p), ("aio_rpm",))
+    rows = sweep("radiator fans", range(0, 101, 10), lambda p: (100, 30, p), ("aio_rpm",))
     log.info("ryujin auto tuning radiator: %s", fmt(rows, "aio_rpm"))
     tops[RYUJIN_RADIATOR] = max(r["aio_rpm"] for _, r in rows)
 
     both = ("rpm_1", "rpm_2")
-    rows = sweep(range(PUMP_MIN_PCT, 101, 10), lambda p: (p, 30, 30), both)
+    rows = sweep("pump", range(PUMP_MIN_PCT, 101, 10), lambda p: (p, 30, 30), both)
     k = moved(rows, both)
     log.info("ryujin auto tuning pump (%s): %s", k, fmt(rows, k))
     tops[RYUJIN_PUMP] = max(r[k] for _, r in rows)
 
-    rows = sweep(range(0, 101, 10), lambda p: (PUMP_MIN_PCT, p, 30), both)
+    rows = sweep("pump-head fan", range(0, 101, 10), lambda p: (PUMP_MIN_PCT, p, 30), both)
     k = moved(rows, both)
     log.info("ryujin auto tuning pump-head fan (%s): %s", k, fmt(rows, k))
     tops[RYUJIN_HEAD_FAN] = max(r[k] for _, r in rows)
