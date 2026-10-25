@@ -1,12 +1,15 @@
-"""OLED page — scenes: hardware_monitor / text / preset_gif / off.
+"""OLED page — scenes: hardware_monitor / text / image / off.
 
 Includes the SINGLE / ROTATE mode toggle for hardware_monitor with a
 multi-checkbox metric picker + interval slider.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from PyQt6.QtWidgets import (
-    QCheckBox, QGridLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget,
+    QCheckBox, QFileDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+    QPushButton, QVBoxLayout, QWidget,
 )
 
 from polylux.config import OledConfig
@@ -49,7 +52,7 @@ class OledPage(DevicePage):
         return [
             ("hardware_monitor", "HARDWARE_MONITOR", None),
             ("text",             "TEXT",             None),
-            ("preset_gif",       "PRESET_GIF",       None),
+            ("image",            "IMAGE",            None),
             ("off",              "OFF",              None),
         ]
 
@@ -97,18 +100,24 @@ class OledPage(DevicePage):
                 lambda val: self._state.update_device("oled", {"scroll_speed": val})
             )
             v.addWidget(spd)
-        elif scene == "preset_gif":
-            head = QLabel("FACTORY ANIMATIONS")
-            v.addWidget(head)
-            body = QLabel(
-                "The chip ships ~6 factory animations (EXTREME / shark / "
-                "swimmer / etc) and cycles through them on its own once "
-                "the scene is active. Per-preset selection needs protocol "
-                "capture work (planned for v0.5)."
+        elif scene == "image":
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            self._image_path_lbl = QLabel(
+                Path(cfg.image_path).name if cfg.image_path else "(no image selected)"
             )
-            body.setObjectName("dim")
-            body.setWordWrap(True)
-            v.addWidget(body)
+            self._image_path_lbl.setObjectName("dim")
+            self._image_path_lbl.setWordWrap(True)
+            row.addWidget(self._image_path_lbl, 1)
+            btn = QPushButton("Browse…")
+            btn.clicked.connect(self._on_pick_image)
+            row.addWidget(btn)
+            v.addWidget(QLabel("IMAGE OR GIF"))
+            v.addLayout(row)
+            hint = QLabel("Cropped to 256×64 and uploaded once; animated GIFs keep playing.")
+            hint.setObjectName("dim")
+            hint.setWordWrap(True)
+            v.addWidget(hint)
         else:
             lbl = QLabel("(no extra config)")
             lbl.setObjectName("dim")
@@ -175,11 +184,33 @@ class OledPage(DevicePage):
             return  # Empty list is invalid — config validation would reject
         self._state.update_device("oled", {"rotate_sources": sources})
 
-    def build_common_config(self):
-        # OLED has no driver-side common controls in v0.4 — ENABLED lives in
-        # the header. Returning None hides the COMMON card entirely so the
-        # scene config card spans the full width.
-        return None
+    def _on_pick_image(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Pick image for the OLED",
+            "", "Images (*.png *.jpg *.jpeg *.bmp *.gif);;All files (*.*)",
+        )
+        if path:
+            self._state.update_device("oled", {"image_path": path})
+            self._image_path_lbl.setText(Path(path).name)
+
+    def build_common_config(self) -> QWidget:
+        # The two switches of AC's OLED Settings dialog (ec 5c); there is
+        # no brightness.
+        cfg: OledConfig = self._state.snapshot().oled
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(14)
+        dark = QCheckBox("DARK WHEN THE PC IS OFF")
+        dark.setChecked(cfg.dark_when_off)
+        dark.toggled.connect(lambda on: self._state.update_device("oled", {"dark_when_off": on}))
+        v.addWidget(dark)
+        rot = QCheckBox("ROTATE 180°")
+        rot.setChecked(cfg.rotate_180)
+        rot.toggled.connect(lambda on: self._state.update_device("oled", {"rotate_180": on}))
+        v.addWidget(rot)
+        v.addStretch(1)
+        return w
 
     def build_live_preview(self) -> QWidget:
         return OledLivePreview()
