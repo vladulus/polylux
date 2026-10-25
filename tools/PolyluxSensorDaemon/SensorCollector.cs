@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Reflection;
 using System.Text;
 using LibreHardwareMonitor.Hardware;
 using Microsoft.Extensions.Hosting;
@@ -32,6 +33,15 @@ public sealed class SensorCollector : BackgroundService
     private readonly Dictionary<string, float> _requested = new();
     private readonly object _controlLock = new();
 
+    // The ASUS embedded controller holds the VRM temperature, but LHM 0.9.6
+    // only reads it for boards in its list, which has the ROG MAXIMUS Z690
+    // EXTREME GLACIAL and not the plain EXTREME (same Intel600 EC map,
+    // VRM at 0x3E). On the plain EXTREME we build LHM's EC reader with the
+    // GLACIAL profile through reflection and publish only its VRM sensor.
+    private const string AsusEcBoard = "ASUS ROG MAXIMUS Z690 EXTREME";
+    private const string AsusEcProfile = "ROG_MAXIMUS_Z690_EXTREME_GLACIAL";
+    private IHardware? _asusEc;
+
     public SensorCollector(ILogger<SensorCollector> log, DaemonOptions opts)
     {
         _log = log;
@@ -56,6 +66,7 @@ public sealed class SensorCollector : BackgroundService
         {
             _computer.Open();
             _log.LogInformation("LHM Computer opened, {count} top-level hardware items", _computer.Hardware.Count);
+            OpenAsusEc();
         }
         catch (Exception ex)
         {
@@ -77,6 +88,7 @@ public sealed class SensorCollector : BackgroundService
         }
         finally
         {
+            try { _asusEc?.GetType().GetMethod("Close")?.Invoke(_asusEc, null); } catch { /* ignored */ }
             try { _computer.Close(); } catch (Exception ex) { _log.LogWarning(ex, "Computer.Close threw"); }
         }
     }
@@ -189,11 +201,54 @@ public sealed class SensorCollector : BackgroundService
         }
     }
 
+    private void OpenAsusEc()
+    {
+        if (!_computer.Hardware.Any(h => h.HardwareType == HardwareType.Motherboard && h.Name == AsusEcBoard))
+            return;
+        try
+        {
+            var asm = typeof(Computer).Assembly;
+            var ecType = asm.GetType("LibreHardwareMonitor.Hardware.Motherboard.Lpc.EC.EmbeddedController");
+            var modelType = asm.GetType("LibreHardwareMonitor.Hardware.Motherboard.Model");
+            var create = ecType?.GetMethod("Create", BindingFlags.NonPublic | BindingFlags.Static);
+            if (create is null || modelType is null)
+            {
+                _log.LogWarning("ASUS EC: LHM internals not found; no VRM temperature");
+                return;
+            }
+            var model = Enum.Parse(modelType, AsusEcProfile);
+            _asusEc = create.Invoke(null, new[] { model, new NullSettings() }) as IHardware;
+            _asusEc?.Update();
+            // One line per start, so the readings can be checked against the
+            // board (the GLACIAL map is borrowed).
+            _log.LogWarning("ASUS EC ({profile} map): {values}", AsusEcProfile,
+                _asusEc is null ? "not created" :
+                string.Join(", ", _asusEc.Sensors.Select(x => $"{x.Name}={x.Value}")));
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "ASUS EC: reader failed; no VRM temperature");
+            _asusEc = null;
+        }
+    }
+
+    private static bool IsPublishedEcSensor(ISensor s) =>
+        s.SensorType == SensorType.Temperature && s.Name == "VRM";
+
+    private sealed class NullSettings : ISettings
+    {
+        public bool Contains(string name) => false;
+        public void SetValue(string name, string value) { }
+        public string GetValue(string name, string value) => value;
+        public void Remove(string name) { }
+    }
+
     private void Refresh()
     {
         try
         {
             foreach (var hw in _computer.Hardware) hw.Accept(_visitor);
+            _asusEc?.Update();
             EnforceRequestedControls();
             var bytes = BuildJsonBytes();
             lock (_treeLock) _cachedJson = bytes;
@@ -225,13 +280,19 @@ public sealed class SensorCollector : BackgroundService
             first = false;
             WriteHardware(sb, hw, ref id);
         }
+        if (_asusEc is not null)
+        {
+            if (!first) sb.Append(',');
+            WriteHardware(sb, _asusEc, ref id, IsPublishedEcSensor);
+        }
 
         sb.Append("]}");  // close PC node
         sb.Append("]}");  // close root
         return Encoding.UTF8.GetBytes(sb.ToString());
     }
 
-    private static void WriteHardware(StringBuilder sb, IHardware hw, ref int id)
+    private static void WriteHardware(StringBuilder sb, IHardware hw, ref int id,
+                                      Func<ISensor, bool>? include = null)
     {
         sb.Append("{\"id\":").Append(id++)
           .Append(",\"Text\":").Append(Json(hw.Name))
@@ -239,6 +300,7 @@ public sealed class SensorCollector : BackgroundService
 
         // Group sensors by SensorType so the tree mirrors LHM's UI.
         var sensorsByType = hw.Sensors
+            .Where(s => include is null || include(s))
             .GroupBy(s => s.SensorType)
             .OrderBy(g => (int)g.Key);
 

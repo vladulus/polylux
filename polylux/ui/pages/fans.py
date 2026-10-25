@@ -288,7 +288,7 @@ class FanSettingsDialog(QDialog):
         self._temp_src = QComboBox()
         self._temp_src.addItems([
             "cpu package", "cpu core", "gpu core",
-            "gpu hot spot", "motherboard", "liquid",
+            "gpu hot spot", "motherboard", "liquid", "vrm",
         ])
         self._temp_src.setEditable(True)
         self._temp_src.currentTextChanged.connect(
