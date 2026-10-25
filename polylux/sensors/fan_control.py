@@ -56,6 +56,19 @@ def interpolate_curve(curve: Iterable[tuple[float, float]], temp_c: float) -> fl
     return float(pts[-1][1])
 
 
+# Ryujin II channels live in fans.fans next to the motherboard headers so they
+# get the same cards and settings; run_ryujin drives them over USB, the
+# daemon runner skips them.
+RYUJIN_PUMP = "ryujin:pump"
+RYUJIN_HEAD_FAN = "ryujin:head_fan"
+RYUJIN_RADIATOR = "ryujin:radiator"
+RYUJIN_IDS = (RYUJIN_PUMP, RYUJIN_HEAD_FAN, RYUJIN_RADIATOR)
+
+
+def is_ryujin(sensor_id: str) -> bool:
+    return sensor_id.startswith("ryujin:")
+
+
 # Names offered in the Fans UI that LHM doesn't use. "motherboard" was never
 # a real LHM sensor, so every fan on it ran the silent fallback. On the
 # NCT6798D the board sensor is SYSTIN (AC labels it so), which LHM reports
@@ -120,5 +133,7 @@ def apply_all(fans: Iterable[FanConfig], temps: dict[str, float],
     """Apply every configured fan in sequence. Returns per-fan ok/fail."""
     out: dict[str, bool] = {}
     for fan in fans:
+        if is_ryujin(fan.sensor_id):
+            continue
         out[fan.sensor_id] = apply_fan(fan, temps, daemon_url=daemon_url, timeout=timeout)
     return out

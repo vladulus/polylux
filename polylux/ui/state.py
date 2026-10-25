@@ -38,6 +38,8 @@ class ServiceState:
         self._cfg = cfg
         self._yaml_path = yaml_path
         self._debounce = debounce_seconds
+        # Set by the Fans page AUTO TUNING button, consumed by run_ryujin.
+        self.ryujin_autotune = threading.Event()
         self._lock = threading.RLock()
         self._revision = 0
         self._status: dict[str, dict] = {

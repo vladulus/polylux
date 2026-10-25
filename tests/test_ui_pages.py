@@ -37,13 +37,19 @@ def test_every_scene_builds_and_validates(qtbot, qapp, state, page_mod, cls, sce
         assert p.active_scene() == scene
 
 
-def test_fans_page_shows_ryujin_card(qtbot, qapp, state):
+def test_ryujin_fans_get_regular_cards(qtbot, qapp, tmp_path):
+    """Pump, pump-head fan and radiator fans are fans.fans entries, so they
+    get the same gauge cards (right-click settings) as the board headers."""
+    from polylux.config import load
     from polylux.ui.pages.fans import FansPage
-    state.update_device("ryujin_lcd", {"enabled": True})
-    state.set_frame("ryujin_fans", {"liquid_c": 28.1, "rpm_1": 2760, "rpm_2": 1890,
-                                    "aio_rpm": 1350, "aio_pct": 43, "aio_temp": 38.0,
-                                    "pump_pct": 100, "embedded_pct": 30})
-    p = FansPage(state)
+    cfgp = tmp_path / "polylux.yaml"
+    cfgp.write_text("ryujin_lcd:\n  enabled: true\n", encoding="utf-8")
+    st = ServiceState(cfg=load(cfgp), yaml_path=cfgp)
+    st.set_frame("ryujin_fans", {"liquid_c": 28.1, "rpm_1": 2760, "rpm_2": 1890,
+                                 "aio_rpm": 1350, "aio_pct": 43,
+                                 "pump_target": 40, "head_target": 30})
+    p = FansPage(st)
     qtbot.addWidget(p)
-    p._ryujin_card.refresh()
-    assert "2760 rpm" in p._ryujin_card._readout.text()
+    assert {"ryujin:pump", "ryujin:head_fan", "ryujin:radiator"} <= set(p._fan_to_card)
+    p._refresh_live()
+    assert p._fan_to_card["ryujin:pump"]._gauge._value == 2760

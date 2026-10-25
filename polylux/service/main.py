@@ -459,6 +459,31 @@ def _monitor_values(temps, lcd):
 PUMP_MIN_PCT = 30
 
 
+def _ryujin_autotune(lcd, state: ServiceState) -> None:
+    """AC's Auto Tuning (ryujin_autotune_USBPcap1.pcap): radiator fans at
+    0, 10 … 100 %, ~3.5 s each, reading ec a0 after every step. The top
+    reading becomes the radiator card's max RPM; the table goes to the log."""
+    from dataclasses import asdict
+    from polylux.config import FanConfig
+    from polylux.sensors.fan_control import RYUJIN_RADIATOR
+
+    table = []
+    for pct in range(0, 101, 10):
+        lcd.set_fans(100, 30, pct)
+        time.sleep(3.5)
+        table.append((pct, lcd.read_status()["aio_rpm"]))
+    log.info("ryujin auto tuning: %s", ", ".join(f"{p}%={r}" for p, r in table))
+    top = max(r for _, r in table)
+    fans = []
+    for f in state.snapshot().fans.fans:
+        if f.sensor_id == RYUJIN_RADIATOR and top > 0:
+            kw = {**asdict(f), "max_rpm": top}
+            kw["curve"] = tuple(tuple(p) for p in kw["curve"])
+            f = FanConfig(**kw)
+        fans.append(f)
+    state.update_device("fans", {"fans": fans})
+
+
 def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
     """Apply Ryujin scene + settings whenever they change (§9.3)."""
     from polylux.drivers.ryujin_lcd.driver import (
@@ -467,10 +492,13 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
     from polylux.drivers.ryujin_lcd.render import ryujin_image
 
     from polylux.drivers.ryujin_lcd import RyujinLCD
-    from polylux.sensors.fan_control import interpolate_curve
+    from polylux.sensors.fan_control import (
+        RYUJIN_HEAD_FAN, RYUJIN_PUMP, RYUJIN_RADIATOR, resolve_duty,
+    )
     from polylux.sensors.lhm import LHMSensors
 
     temps = LHMSensors()
+    autotune_request = state.ryujin_autotune
     fans_sent = None
     next_fan_tick = next_monitor_tick = 0.0
     applied = failed_upload = None
@@ -540,28 +568,33 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
         if rcfg.fans_enabled and time.monotonic() >= next_fan_tick:
             next_fan_tick = time.monotonic() + 4.0
             try:
+                if autotune_request.is_set():
+                    autotune_request.clear()
+                    _ryujin_autotune(lcd, state)
                 status = lcd.read_status()
-                if rcfg.aio_temp_source.lower() == "liquid":
-                    temp = status["liquid_c"]
-                else:
-                    temp = temps.temps().get(rcfg.aio_temp_source.lower())
-                aio = interpolate_curve(list(rcfg.aio_curve), temp) if temp is not None else 100.0
-                pump = rcfg.pump_pct
-                if rcfg.pump_mode == "curve":
-                    pt = temps.temps().get(rcfg.pump_temp_source.lower())
-                    # no reading -> full speed; never below PUMP_MIN_PCT
-                    pump = interpolate_curve(list(rcfg.pump_curve), pt) if pt is not None else 100
-                pump = max(PUMP_MIN_PCT, min(100, round(pump)))
-                target = (pump, rcfg.embedded_fan_pct, round(aio))
+                t = {**temps.temps(), "liquid": status["liquid_c"]}
+                by_id = {f.sensor_id: f for f in state.snapshot().fans.fans}
+
+                def duty(sid, legacy_auto):
+                    # Same modes and curves as the motherboard fans; AUTO has
+                    # no BIOS behind it here, so it means the given default.
+                    f = by_id.get(sid)
+                    d = resolve_duty(f, t) if f else None
+                    return legacy_auto if d is None else d
+
+                pump = max(PUMP_MIN_PCT, min(100, round(duty(RYUJIN_PUMP, 100))))
+                head = max(0, min(100, round(duty(RYUJIN_HEAD_FAN, rcfg.embedded_fan_pct))))
+                rad = max(0, min(100, round(duty(RYUJIN_RADIATOR, 100))))
+                target = (pump, head, rad)
                 # Sent every tick like AC: when the host stays quiet the
                 # pump-head fan went to ~4800 rpm on its own (2026-10-25).
                 lcd.set_fans(*target)
                 if target != fans_sent:
-                    log.info("ryujin fans: pump %d%% embedded %d%% aio %d%% (%s=%s)",
-                             *target, rcfg.aio_temp_source, temp)
+                    log.info("ryujin fans: pump %d%% head fan %d%% radiator %d%% (liquid %.1f)",
+                             *target, status["liquid_c"])
                     fans_sent = target
-                state.set_frame("ryujin_fans", {**status, "aio_pct": target[2],
-                                                "aio_temp": temp, "pump_target": pump})
+                state.set_frame("ryujin_fans", {**status, "pump_target": pump,
+                                                "head_target": head, "aio_pct": rad})
             except Exception as ex:
                 log.warning("ryujin fan tick failed: %s", ex)
                 if "not connected" in str(ex) or "No such device" in str(ex) or "reply within" in str(ex):

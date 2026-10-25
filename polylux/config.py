@@ -475,5 +475,28 @@ def load(path: str | Path = DEFAULT_CONFIG_PATH) -> PolyluxConfig:
                     fan.curve = tuple(pts)
             cfg.fans.fans.append(fan)
 
+    if cfg.ryujin_lcd.enabled:
+        _seed_ryujin_fans(cfg)
     cfg.validate()
     return cfg
+
+
+def _seed_ryujin_fans(cfg: PolyluxConfig) -> None:
+    """Give the Ryujin's pump, pump-head fan and radiator fans their own
+    fans.fans entries (same cards and settings as the motherboard headers),
+    carrying over the ryujin_lcd pump/aio settings of older configs.
+    max_rpm: radiator 1920 from AC's Auto Tuning, pump ~2800 and head fan
+    ~4900 as read from ec 99 at 100 % on 2026-10-25."""
+    have = {f.sensor_id for f in cfg.fans.fans}
+    r = cfg.ryujin_lcd
+    seeds = [
+        FanConfig(sensor_id="ryujin:pump", name="AIO PUMP", mode="curve",
+                  temp_source=r.pump_temp_source, curve=r.pump_curve, max_rpm=2800),
+        FanConfig(sensor_id="ryujin:head_fan", name="PUMP-HEAD FAN (VRM)", mode="curve",
+                  temp_source="cpu package",
+                  curve=((20.0, float(r.embedded_fan_pct)), (100.0, float(r.embedded_fan_pct))),
+                  max_rpm=4900),
+        FanConfig(sensor_id="ryujin:radiator", name="RADIATOR FANS", mode="curve",
+                  temp_source=r.aio_temp_source, curve=r.aio_curve, max_rpm=1920),
+    ]
+    cfg.fans.fans.extend(f for f in seeds if f.sensor_id not in have)

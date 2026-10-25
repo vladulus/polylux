@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (
 )
 
 from polylux.config import FanConfig
-from polylux.sensors.fan_control import _post as fan_post
+from polylux.sensors.fan_control import _post as fan_post, is_ryujin
 from polylux.ui.state import ServiceState
 from polylux.ui.widgets.gauge import RadialGauge
 from polylux.ui.widgets.slider_row import SliderRow
@@ -203,8 +203,9 @@ class _CalibrationThread(threading.Thread):
             # Phase 2: also kick the daemon directly so we don't wait
             # for the next runner tick (could be up to update_seconds).
             for f in fans:
-                fan_post(DAEMON_URL, f.sensor_id,
-                         {"mode": "software", "value": 100}, 2.0)
+                if not is_ryujin(f.sensor_id):
+                    fan_post(DAEMON_URL, f.sensor_id,
+                             {"mode": "software", "value": 100}, 2.0)
 
             # Phase 3: count down 1 Hz, sampling live RPMs so we have a
             # measured peak that doesn't depend on whatever stale Max
@@ -318,7 +319,7 @@ class FanSettingsDialog(QDialog):
         self._temp_src = QComboBox()
         self._temp_src.addItems([
             "cpu package", "cpu core", "gpu core",
-            "gpu hot spot", "motherboard",
+            "gpu hot spot", "motherboard", "liquid",
         ])
         self._temp_src.setEditable(True)
         self._temp_src.currentTextChanged.connect(
@@ -533,69 +534,6 @@ class _FanGaugeCard(QFrame):
 # Page
 # ---------------------------------------------------------------------------
 
-class _RyujinFansCard(QFrame):
-    """Ryujin II: live readings from the AIO (run_ryujin publishes them as
-    the "ryujin_fans" frame), the pump curve (CPU temperature), the radiator
-    fan curve (liquid temperature) and the pump-head fan percentage."""
-
-    def __init__(self, state: ServiceState) -> None:
-        super().__init__()
-        self.setObjectName("card")
-        self._state = state
-        v = QVBoxLayout(self)
-        v.setContentsMargins(16, 12, 16, 12)
-        v.setSpacing(10)
-        head = QLabel("RYUJIN II · AIO")
-        hf = head.font(); hf.setBold(True); head.setFont(hf)
-        v.addWidget(head)
-        self._readout = QLabel("waiting for the AIO…")
-        self._readout.setObjectName("dim")
-        v.addWidget(self._readout)
-        cfg = state.snapshot().ryujin_lcd
-        self._pump = self._curve_editor(
-            v, f"PUMP — curve on {cfg.pump_temp_source.upper()} (never below 30 %)",
-            cfg.pump_curve, 30, lambda c: {"pump_curve": c, "pump_mode": "curve"})
-        self._aio = self._curve_editor(
-            v, f"RADIATOR FANS — curve on {cfg.aio_temp_source.upper()}",
-            cfg.aio_curve, 0, lambda c: {"aio_curve": c})
-        row = SliderRow(label="PUMP-HEAD FAN (VRM)", minimum=0, maximum=100,
-                        value=cfg.embedded_fan_pct, fmt="{v}%")
-        row.value_changed.connect(
-            lambda val: self._state.update_device("ryujin_lcd", {"embedded_fan_pct": val})
-        )
-        v.addWidget(row)
-
-    def _curve_editor(self, v, title, curve, min_pct, patch):
-        v.addWidget(QLabel(title))
-        grid = QGridLayout()
-        spins: list[tuple[QDoubleSpinBox, QDoubleSpinBox]] = []
-
-        def save():
-            self._state.update_device(
-                "ryujin_lcd", patch(tuple((st.value(), sd.value()) for st, sd in spins)))
-
-        for i, (t, d) in enumerate(curve):
-            st = QDoubleSpinBox(); st.setRange(15, 100); st.setSuffix(" °C"); st.setDecimals(0); st.setValue(t)
-            sd = QDoubleSpinBox(); sd.setRange(min_pct, 100); sd.setSuffix(" %"); sd.setDecimals(0); sd.setValue(d)
-            st.valueChanged.connect(save)
-            sd.valueChanged.connect(save)
-            grid.addWidget(QLabel(f"PT {i + 1}"), i, 0)
-            grid.addWidget(st, i, 1)
-            grid.addWidget(sd, i, 2)
-            spins.append((st, sd))
-        v.addLayout(grid)
-        return spins
-
-    def refresh(self) -> None:
-        s = self._state.last_frame("ryujin_fans")
-        if not s:
-            return
-        self._readout.setText(
-            f"liquid {s['liquid_c']:.1f} °C · pump {s['rpm_1']} rpm @ {s.get('pump_target', '?')}% · "
-            f"pump-head fan {s['rpm_2']} rpm · radiator fans {s['aio_rpm']} rpm @ {s['aio_pct']}%"
-        )
-
-
 class FansPage(QWidget):
 
     _cal_tick = pyqtSignal(int)        # cross-thread: seconds_remaining
@@ -624,6 +562,11 @@ class FansPage(QWidget):
         self._enable_cb = QCheckBox("ENABLED")
         self._enable_cb.setChecked(bool(state.snapshot().fans.enabled))
         self._enable_cb.toggled.connect(self._on_enable_toggled)
+        tune = QPushButton("AUTO TUNING")
+        tune.setToolTip("Spin every fan to full and record its top speed "
+                        "(motherboard headers and the Ryujin radiator fans)")
+        tune.clicked.connect(self._auto_tune)
+        head.addSpacing(16); head.addWidget(tune)
         head.addSpacing(16); head.addWidget(self._enable_cb)
         outer.addLayout(head)
 
@@ -653,11 +596,6 @@ class FansPage(QWidget):
         self._cards_grid.setSpacing(14)
         self._cards_grid.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(self._cards_holder, 1)
-        self._ryujin_card: Optional[_RyujinFansCard] = None
-        if state.snapshot().ryujin_lcd.enabled:
-            self._ryujin_card = _RyujinFansCard(state)
-            outer.addSpacing(14)
-            outer.addWidget(self._ryujin_card)
         outer.addStretch(0)
 
         # Discovery adds fans plugged in since the last run (it skips the
@@ -685,7 +623,8 @@ class FansPage(QWidget):
         # A configured fan whose header showed no RPM since the sensor daemon
         # started (= this boot) has been unplugged or moved: drop it.
         live = {p["sensor_id"] for p in pairs}
-        kept = [f for f in self._state.snapshot().fans.fans if f.sensor_id in live]
+        kept = [f for f in self._state.snapshot().fans.fans
+                if f.sensor_id in live or is_ryujin(f.sensor_id)]
         if len(kept) != len(self._state.snapshot().fans.fans):
             log.info("fans: dropping %d unplugged fan(s)",
                      len(self._state.snapshot().fans.fans) - len(kept))
@@ -724,6 +663,22 @@ class FansPage(QWidget):
             on_done=self._cal_done.emit,
         )
         self._cal_thread.start()
+
+    def _auto_tune(self) -> None:
+        """Re-measure every fan: the motherboard calibration for the headers
+        (all of them, not only uncalibrated ones) and AC's sweep for the
+        Ryujin radiator fans (run by run_ryujin, which owns that USB device)."""
+        self._state.ryujin_autotune.set()
+        fans = list(self._state.snapshot().fans.fans)
+        reset = []
+        for f in fans:
+            if not is_ryujin(f.sensor_id):
+                kw = {**asdict(f), "max_rpm": 0}
+                kw["curve"] = tuple(tuple(p) for p in kw["curve"])
+                f = FanConfig(**kw)
+            reset.append(f)
+        self._state.update_device("fans", {"fans": reset})
+        self._maybe_start_calibration()
 
     def _on_cal_tick(self, remaining: int) -> None:
         self._cal_countdown.setText(f"{remaining}s remaining")
@@ -767,9 +722,11 @@ class FansPage(QWidget):
             self._fan_to_card[fan.sensor_id] = card
 
     def _refresh_live(self) -> None:
-        if self._ryujin_card is not None:
-            self._ryujin_card.refresh()
         rpms = _rpm_snapshot()
+        aio = self._state.last_frame("ryujin_fans")
+        if aio:
+            rpms.update({"ryujin:pump": aio["rpm_1"], "ryujin:head_fan": aio["rpm_2"],
+                         "ryujin:radiator": aio["aio_rpm"]})
         for fan in self._state.snapshot().fans.fans:
             card = self._fan_to_card.get(fan.sensor_id)
             if card is None:
