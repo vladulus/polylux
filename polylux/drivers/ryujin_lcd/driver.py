@@ -16,6 +16,7 @@ AC 6.5.7 sends (USBPcap, 2026-10-25, docs/PROJECT_STATE.md §9.3).
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from dataclasses import dataclass, field
@@ -35,6 +36,8 @@ HID_PACKET_SIZE = 65
 LCD_BULK_CHUNK = 4096
 LCD_WIDTH = 320
 LCD_HEIGHT = 240
+
+log = logging.getLogger(__name__)
 
 
 class RyujinLCDError(RuntimeError):
@@ -166,21 +169,22 @@ class RyujinLCD:
         ch = self._channel()
         p71, pf1, p72, p73, p7f = (p for p, _ in build_upload_prep_packets(image_bytes))
         ch.drain()
-        # AC first frees the slot it writes to (AIOFanSDK log: MediaDelete
-        # Type:0 index:1, then MediaTransfer Type:1 index:1): ec 72 01 <kind>
-        # <slot> + ec 73 03 -> ee 13 00 03. A 10 in the flags byte
-        # (ee 13 10 ..) is what every file operation answered while the LCD
-        # was wedged by the un-acked uploads of 2026-10-25; only a power
-        # cycle cleared it, so stop instead of making it worse.
+        # Stop playing the stored file, then free the slot we write to like
+        # AC (AIOFanSDK log: MediaDelete Type:0 index:1, MediaTransfer Type:1
+        # index:1): ec 72 01 <kind> <slot> + ec 73 03 -> ee 13 xx 03. The
+        # flags byte xx came back 10 right after a good upload too
+        # (2026-10-25), so it is logged, not treated as fatal.
+        ch.command(_pad([0xEC, 0x51, 0x21]))
+        time.sleep(0.3)
         ch.command(p72)
         ch.write(_pad([0xEC, 0x73, 0x03]))
         ev = ch.wait_for_event(0x13, 0x03, 3.0)
-        if ev[2] & 0x10:
-            raise RyujinLCDError("LCD refuses file operations (ee 13 10 03): "
-                                 "power the PC off fully, then retry")
+        if ev[2]:
+            log.info("ryujin: slot delete answered flags %02x", ev[2])
         time.sleep(0.5)
         ch.drain()
-        ch.command(p71)
+        ch.write(p71)                   # the ec 71 reply is not always sent; ee 12 is
+        ch._wait(lambda r: r[:2] in (b"\xec\x71", b"\xee\x12"), "ec 71 / ee 12", 1.5)
         ch.command(pf1)
         ch.command(p72)
         ch.write(p73)                   # the ec 73 reply sometimes never comes
@@ -194,7 +198,9 @@ class RyujinLCD:
             ch.drain()
             ch.write(p73)
             ch.wait_for_event(0x13, 0x01, 2.0)
-        ch.command(p7f)
+        if ch.command(p7f)[2] != 0:     # ec 7f 02 = refused, ec 7f 00 .. 10 = go
+            ch.write(_pad([0xEC, 0x73, 0xFF]))
+            raise RyujinLCDError("LCD refused the upload (ec 7f 02)")
         ch.bulk_upload(lambda d: self.bulk_write(d), image_bytes, timeout=6.0)
         ch.write(_pad([0xEC, 0x73, 0xFF]))
         ch.wait_for_event(0x13, 0xFF, 5.0)
