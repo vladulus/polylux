@@ -746,9 +746,21 @@ is "Dark"; the effect shown before was Rainbow.
 [Probabil] `ec 35 <ch> 00 <slot> <mode>` with slot 01 = shutdown state,
 mode 05 = rainbow (the old shutdown effect), mode 01 = static; Off is
 static with an all-zero colour from `ec 36 00 ff 01`, and `ec 3f 55`
-saves to the controller. [Probabil] this is why the LEDs stayed lit with
-the PC off: Aura Sync was on Dark, so the Rainbow shutdown effect could
-never be changed. Not yet verified by a shutdown.
+saves to the controller. Verified 2026-10-25: after this, a power-off
+left the motherboard LEDs dark (Vlad). [Probabil] they stayed lit before
+because Aura Sync was on Dark, which locks the (Rainbow) shutdown effect.
+
+AniMe Matrix "When system is in sleep, hibernate or soft off states" → OFF
+(`s5_retry_USBPcap1.pcap`, chip 1A21 = dev 12 after that reboot):
+
+    ec 42 02 00 ..
+    ec 44 01 02 ..
+
+Ryujin "Standby Mode" → OFF: only `ec 5c` with b12,b13 64 14 → 00 00
+(same as the first Ryujin capture). Both not yet verified by a power-off.
+The first Matrix attempt failed in AC with F-1031 while AacMbHal was
+being re-created every ~7 s (01:45–01:50, cause unknown); after a
+power cycle the save went through.
 
 ### 9.4.1 BIOS RGB toggle = hardware power cut (Vlad's verification 2026-05-12)
 
