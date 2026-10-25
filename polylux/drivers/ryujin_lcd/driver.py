@@ -1,27 +1,19 @@
 """Ryujin II 360 AIO LCD driver.
 
-Talks to USB device PID 0x1988 ("ROG RYUJIN II"). Same USB layout as the
-motherboard chip 1A21 (iface 0 BULK OUT + iface 1 HID INT OUT), but on
-a different physical chip — so we can NOT reuse Chip1A21 here.
+Talks to USB device PID 0x1988 ("ROG RYUJIN II"): iface 0 BULK OUT for
+image data, iface 1 HID for `ec` commands. Every sequence here is what
+AC 6.5.7 sends (USBPcap, 2026-10-25, docs/PROJECT_STATE.md §9.3).
 
-Image upload protocol (verified from matrix_p1.pcap, 358 bulk OUT
-chunks of 4096B during a Ryujin LCD update session):
-  - Each 4096B bulk chunk contains a portion of a GIF89a 320x240 file.
-  - First chunk starts with the GIF89a magic "47 49 46 38 39 61 40 01
-    f0 00" = "GIF89a" + width 0x0140 + height 0x00f0 = 320x240.
-
-The HID prep packets observed in the same pcap (paired with bulk):
-  - `ec dc 00`   heartbeats
-  - `ec 52/53/...` hardware-monitor text overlay (shared with chip 1A21)
-
-Pending: exact HID prep packet before bulk image transfers — we have
-the bulk content but the immediately-preceding HID is dominated by text
-overlay during continuous LCD refresh, so the actual "begin image
-upload" HID may be a once-per-session command. For now, we send the
-bulk chunks directly and rely on the LCD's firmware default state to
-accept them. If that fails on a fresh boot, we'll need to add a prep
-HID similar to OLED Custom Image upload.
+  image upload:  ec 71 01 01, ec f1, ec 72 01 <kind> 01, ec 73 01,
+                 ec 7f 02 <size 24-bit LE>, BULK file bytes padded to
+                 4 KB, ec 73 ff, ec 5c <settings>,
+                 ec 5d 00 01 11 01 01 05, ec 51 11 01 01
+                 kind 01 = JPEG (seen), 02 = GIF (seen in matrix_p1.pcap)
+  settings:      ec 5c 01 00 64 <portrait> <display_off> 64 <14|00> 00
+                 <anim> 00 <standby_brightness> <14|00> 00 <anim>
+  firmware animation:  ec 5d 00 01 14 00 <idx> 05, ec 51 14 00 <idx>
 """
+
 from __future__ import annotations
 
 import os
@@ -150,65 +142,79 @@ class RyujinLCD:
 
     # --- public API ---
 
-    def upload_image(self, image_bytes: bytes) -> None:
-        """Upload a GIF (320x240 color, animated or single-frame) to the LCD.
-
-        Args:
-          image_bytes: raw GIF file contents. Native LCD resolution is
-                       320x240; smaller/larger get scaled by the LCD
-                       firmware (or letterboxed — TBD). Max size ~2MB
-                       (per ec 7f 02 24-bit size field).
-
-        Wire protocol decoded from matrix_p1.pcap (Ryujin LCD on dev 20),
-        events 285..290+:
-
-          ec 71 01 01 00 00 00 00     switch to Custom Image mode
-          ec f1 00 00 00 00 00 00     unknown control (always present)
-          ec 72 01 02 01 00 00 00     register upload (byte 3 = 0x02
-                                       distinguishes LCD from OLED 0x00)
-          ec 73 01 00 00 00 00 00     start send
-          ec 7f 02 sLO sMID sHI 00 00 00   bulk prep with 24-bit LE size
-                                            of the IMAGE BYTES (not padded)
-          BULK OUT 4096B × N           image data, padded to next 4KB
-        """
-        if not image_bytes.startswith(b"GIF8"):
-            raise ValueError("image_bytes must be a GIF file (magic 'GIF8...')")
-        if len(image_bytes) == 0:
-            raise ValueError("image_bytes is empty")
-        if len(image_bytes) >= (1 << 24):
-            raise ValueError(
-                f"image_bytes too large: {len(image_bytes)} >= 16MB (24-bit size field)"
-            )
-
-        size = len(image_bytes)
-        size_lo  = size & 0xFF
-        size_mid = (size >> 8) & 0xFF
-        size_hi  = (size >> 16) & 0xFF
-
-        # HID prep packets in order
-        p71 = bytes([0xEC, 0x71, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00])
-        pf1 = bytes([0xEC, 0xF1, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-        p72 = bytes([0xEC, 0x72, 0x01, 0x02, 0x01, 0x00, 0x00, 0x00])
-        p73 = bytes([0xEC, 0x73, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00])
-        p7f = bytes([0xEC, 0x7F, 0x02, size_lo, size_mid, size_hi, 0x00, 0x00])
-        for pkt in (p71, pf1, p72, p73, p7f):
+    def upload_image(self, image_bytes: bytes, settings: "RyujinSettings") -> None:
+        """Upload a 320x240 JPEG or GIF and show it (AC's Image mode)."""
+        for pkt, pause in build_upload_prep_packets(image_bytes):
             self.hid_write(pkt)
-            time.sleep(0.05)
-
-        # Pad image to next 4096B boundary, send chunked
-        padded_len = ((size + LCD_BULK_CHUNK - 1) // LCD_BULK_CHUNK) * LCD_BULK_CHUNK
-        padded = image_bytes + b"\x00" * (padded_len - size)
+            time.sleep(pause)
+        padded_len = -(-len(image_bytes) // LCD_BULK_CHUNK) * LCD_BULK_CHUNK
+        padded = image_bytes + b"\x00" * (padded_len - len(image_bytes))
         for offset in range(0, padded_len, LCD_BULK_CHUNK):
-            chunk = padded[offset:offset + LCD_BULK_CHUNK]
-            n = self.bulk_write(chunk, timeout_ms=5000)
+            n = self.bulk_write(padded[offset:offset + LCD_BULK_CHUNK], timeout_ms=5000)
             if n != LCD_BULK_CHUNK:
-                raise RyujinLCDError(
-                    f"LCD bulk write incomplete at offset {offset}: "
-                    f"{n}/{LCD_BULK_CHUNK}"
-                )
+                raise RyujinLCDError(f"bulk write incomplete at {offset}: {n}/{LCD_BULK_CHUNK}")
+        for pkt in (_pad([0xEC, 0x73, 0xFF]), settings.packet(), *MODE_IMAGE):
+            time.sleep(0.25)
+            self.hid_write(pkt)
 
-        # Commit upload — switch active display from Hardware Monitor to
-        # Custom Image. On the chip 1A21 OLED, ec 73 ff was the switch
-        # (verified live), so try the same for Ryujin. If this doesn't
-        # work the LCD will keep showing HW monitor.
-        self.hid_write(bytes([0xEC, 0x73, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00]))
+    def apply_settings(self, settings: "RyujinSettings") -> None:
+        self.hid_write(settings.packet())
+
+    def show_animation(self, index: int) -> None:
+        """One of the three firmware animations (AC's Default Animation)."""
+        for pkt in build_animation_packets(index):
+            self.hid_write(pkt)
+            time.sleep(0.15)
+
+
+def _pad(head) -> bytes:
+    return bytes(head) + b"\x00" * (HID_PACKET_SIZE - len(head))
+
+
+MODE_IMAGE = (_pad([0xEC, 0x5D, 0x00, 0x01, 0x11, 0x01, 0x01, 0x05]),
+              _pad([0xEC, 0x51, 0x11, 0x01, 0x01]))
+
+
+@dataclass(frozen=True)
+class RyujinSettings:
+    """The ec 5c block. AC resends all of it on every change."""
+    portrait: bool = True
+    display_on: bool = True
+    animation: int = 0             # 0..2, also the standby animation
+    standby: bool = False          # False = LCD dark with the PC off
+    standby_brightness: int = 100  # 0..100
+
+    def packet(self) -> bytes:
+        on = 0x14 if self.display_on else 0x00
+        sb_bright = max(0, min(100, self.standby_brightness)) if self.standby else 0
+        sb_time = 0x14 if self.standby else 0x00
+        return _pad([0xEC, 0x5C, 0x01, 0x00, 0x64, int(self.portrait),
+                     int(not self.display_on), 0x64, on, 0x00, self.animation, 0x00,
+                     sb_bright, sb_time, 0x00, self.animation])
+
+
+def build_upload_prep_packets(image_bytes: bytes) -> list[tuple[bytes, float]]:
+    """HID packets before the bulk transfer, with the pause after each."""
+    if image_bytes[:3] == bytes([0xFF, 0xD8, 0xFF]):
+        kind = 0x01
+    elif image_bytes[:4] == b"GIF8":
+        kind = 0x02
+    else:
+        raise ValueError("Ryujin image must be a JPEG or GIF file")
+    if len(image_bytes) >= 1 << 24:
+        raise ValueError(f"image too large for the 24-bit size field: {len(image_bytes)}")
+    size = len(image_bytes).to_bytes(3, "little")
+    return [
+        (_pad([0xEC, 0x71, 0x01, 0x01]), 0.05),
+        (_pad([0xEC, 0xF1]), 0.2),
+        (_pad([0xEC, 0x72, 0x01, kind, 0x01]), 0.15),
+        (_pad([0xEC, 0x73, 0x01]), 0.5),
+        (_pad([0xEC, 0x7F, 0x02, *size]), 0.5),
+    ]
+
+
+def build_animation_packets(index: int) -> tuple[bytes, bytes]:
+    if not 0 <= index <= 2:
+        raise ValueError(f"animation index must be 0..2, got {index}")
+    return (_pad([0xEC, 0x5D, 0x00, 0x01, 0x14, 0x00, index, 0x05]),
+            _pad([0xEC, 0x51, 0x14, 0x00, index]))
