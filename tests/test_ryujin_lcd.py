@@ -83,3 +83,30 @@ def test_portrait_image_is_turned_into_the_landscape_buffer(tmp_path):
     assert out.size == (320, 240)
     # rotated 270° CCW (= 90° CW): the top band ends up on the right edge
     assert out.getpixel((314, 120))[0] > 200 and out.getpixel((20, 120))[0] < 60
+
+
+def test_autotune_measures_radiator_pump_and_head_fan(tmp_path, monkeypatch):
+    """Every Ryujin card gets a measured max RPM; each sweep takes the ec 99
+    rpm field that moved (pump on rpm_2 here, to prove it isn't assumed)."""
+    from polylux.config import load
+    from polylux.service import main
+    from polylux.ui.state import ServiceState
+
+    class FakeLcd:
+        def set_fans(self, pump, head, aio):
+            self.f = (pump, head, aio)
+
+        def read_status(self):
+            pump, head, aio = self.f
+            return {"liquid_c": 30.0, "rpm_1": 40 * head, "rpm_2": 30 * pump,
+                    "aio_rpm": 600 + 14 * aio, "pump_pct": pump, "embedded_pct": head}
+
+    monkeypatch.setattr(main.time, "sleep", lambda s: None)
+    cfgp = tmp_path / "polylux.yaml"
+    cfgp.write_text("ryujin_lcd:\n  enabled: true\n", encoding="utf-8")
+    st = ServiceState(cfg=load(cfgp), yaml_path=cfgp)
+    main._ryujin_autotune(FakeLcd(), st)
+    tops = {f.sensor_id: f.max_rpm for f in st.snapshot().fans.fans}
+    assert tops["ryujin:radiator"] == 2000
+    assert tops["ryujin:pump"] == 3000
+    assert tops["ryujin:head_fan"] == 4000

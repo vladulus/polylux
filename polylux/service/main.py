@@ -460,24 +460,54 @@ PUMP_MIN_PCT = 30
 
 
 def _ryujin_autotune(lcd, state: ServiceState) -> None:
-    """AC's Auto Tuning (ryujin_autotune_USBPcap1.pcap): radiator fans at
-    0, 10 … 100 %, ~3.5 s each, reading ec a0 after every step. The top
-    reading becomes the radiator card's max RPM; the table goes to the log."""
+    """Measure every Ryujin fan card, ~3.5 s per step, top reading -> max RPM.
+
+    Radiator fans 0, 10 … 100 % (AC's Auto Tuning, ryujin_autotune_USBPcap1
+    .pcap, reading ec a0). AC doesn't sweep the pump or the pump-head fan,
+    so their maxima were fixed numbers; now the pump is stepped 30 … 100 %
+    (never below PUMP_MIN_PCT) and the head fan 0 … 100 %. Which ec 99 rpm
+    field belongs to which was a guess (read_status), so each sweep takes
+    the field that actually moved. Tables go to the log.
+    """
     from dataclasses import asdict
     from polylux.config import FanConfig
-    from polylux.sensors.fan_control import RYUJIN_RADIATOR
+    from polylux.sensors.fan_control import RYUJIN_HEAD_FAN, RYUJIN_PUMP, RYUJIN_RADIATOR
 
-    table = []
-    for pct in range(0, 101, 10):
-        lcd.set_fans(100, 30, pct)
-        time.sleep(3.5)
-        table.append((pct, lcd.read_status()["aio_rpm"]))
-    log.info("ryujin auto tuning: %s", ", ".join(f"{p}%={r}" for p, r in table))
-    top = max(r for _, r in table)
+    def sweep(steps, fans_at, keys):
+        rows = []
+        for pct in steps:
+            lcd.set_fans(*fans_at(pct))
+            time.sleep(3.5)
+            st = lcd.read_status()
+            rows.append((pct, {k: st[k] for k in keys}))
+        return rows
+
+    def moved(rows, keys):
+        return max(keys, key=lambda k: max(r[k] for _, r in rows) - min(r[k] for _, r in rows))
+
+    def fmt(rows, key):
+        return ", ".join(f"{p}%={r[key]}" for p, r in rows)
+
+    tops = {}
+    rows = sweep(range(0, 101, 10), lambda p: (100, 30, p), ("aio_rpm",))
+    log.info("ryujin auto tuning radiator: %s", fmt(rows, "aio_rpm"))
+    tops[RYUJIN_RADIATOR] = max(r["aio_rpm"] for _, r in rows)
+
+    both = ("rpm_1", "rpm_2")
+    rows = sweep(range(PUMP_MIN_PCT, 101, 10), lambda p: (p, 30, 30), both)
+    k = moved(rows, both)
+    log.info("ryujin auto tuning pump (%s): %s", k, fmt(rows, k))
+    tops[RYUJIN_PUMP] = max(r[k] for _, r in rows)
+
+    rows = sweep(range(0, 101, 10), lambda p: (PUMP_MIN_PCT, p, 30), both)
+    k = moved(rows, both)
+    log.info("ryujin auto tuning pump-head fan (%s): %s", k, fmt(rows, k))
+    tops[RYUJIN_HEAD_FAN] = max(r[k] for _, r in rows)
+
     fans = []
     for f in state.snapshot().fans.fans:
-        if f.sensor_id == RYUJIN_RADIATOR and top > 0:
-            kw = {**asdict(f), "max_rpm": top}
+        if tops.get(f.sensor_id, 0) > 0:
+            kw = {**asdict(f), "max_rpm": tops[f.sensor_id]}
             kw["curve"] = tuple(tuple(p) for p in kw["curve"])
             f = FanConfig(**kw)
         fans.append(f)

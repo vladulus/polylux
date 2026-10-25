@@ -674,7 +674,8 @@ class FansPage(QWidget):
     def _auto_tune(self) -> None:
         """Re-measure every fan: the motherboard calibration for the headers
         (all of them, not only uncalibrated ones) and AC's sweep for the
-        Ryujin radiator fans (run by run_ryujin, which owns that USB device)."""
+        Ryujin pump, pump-head fan and radiator fans (run by run_ryujin, which
+        owns that USB device)."""
         self._state.ryujin_autotune.set()
         fans = list(self._state.snapshot().fans.fans)
         reset = []
