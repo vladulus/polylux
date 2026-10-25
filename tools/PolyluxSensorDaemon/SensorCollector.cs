@@ -30,7 +30,8 @@ public sealed class SensorCollector : BackgroundService
     // free within 10 ms (LHM 0.9.6 Control.cs / Nct677X.cs). So once the chip
     // ends up elsewhere, repeated identical POSTs never reach it. Refresh()
     // compares the register readback with this map and rewrites on mismatch.
-    private readonly Dictionary<string, float> _requested = new();
+    private readonly Dictionary<string, (float Value, DateTime At)> _requested = new();
+    private DateTime _lastUpdateStart = DateTime.MinValue;
     private readonly object _controlLock = new();
 
     // The ASUS embedded controller holds the VRM temperature, but LHM 0.9.6
@@ -136,7 +137,7 @@ public sealed class SensorCollector : BackgroundService
                     var clamped = Math.Clamp(value.Value, 0f, 100f);
                     lock (_controlLock)
                     {
-                        _requested[sensorId] = clamped;
+                        _requested[sensorId] = (clamped, DateTime.UtcNow);
                         sensor.Control.SetSoftware(clamped);
                     }
                     _log.LogInformation("Fan {id} → software {pct:0.0}%", sensorId, clamped);
@@ -184,14 +185,17 @@ public sealed class SensorCollector : BackgroundService
     {
         lock (_controlLock)
         {
-            foreach (var (sid, want) in _requested)
+            foreach (var (sid, (want, at)) in _requested)
             {
+                // A request that arrived after this tick's read hasn't been
+                // read back yet; comparing it would be a false alarm.
+                if (at >= _lastUpdateStart) continue;
                 var sensor = FindSensorByIdentifier(sid);
                 if (sensor?.Control is null || sensor.Value is not float got) continue;
                 // One PWM step is 100/255 = 0.4 %; 2 % is clear of rounding.
                 if (Math.Abs(got - want) <= 2f) continue;
-                _log.LogWarning("Fan {id}: chip reads {got:0.0}% but {want:0.0}% was requested; rewriting",
-                                sid, got, want);
+                _log.LogWarning("Fan {id}: chip reads {got:0.0}% but {want:0.0}% was requested; {regs}; rewriting",
+                                sid, got, want, DescribeNuvotonRegisters(sid));
                 // A different value is the only way past LHM's change check;
                 // the nudge is at most one PWM step, and each call rewrites the
                 // manual-mode register too.
@@ -232,6 +236,55 @@ public sealed class SensorCollector : BackgroundService
         }
     }
 
+    /// <summary>
+    /// Mode / command / output registers of one NCT677x fan channel, read
+    /// through LHM's private members: mode 0 = manual. Tells a writer that
+    /// switched the channel back to automatic (mode != 0) from a write of
+    /// ours that never landed (mode 0, command != what we sent).
+    /// </summary>
+    private string DescribeNuvotonRegisters(string sensorId)
+    {
+        try
+        {
+            var slash = sensorId.LastIndexOf("/control/", StringComparison.Ordinal);
+            var index = int.Parse(sensorId[(slash + "/control/".Length)..], CultureInfo.InvariantCulture);
+            var hwId = sensorId[..slash];
+            var hw = AllHardware().FirstOrDefault(h => h.Identifier.ToString() == hwId);
+            if (hw is null) return "registers: hardware not found";
+            object? sio = null;
+            for (var t = hw.GetType(); t is not null && sio is null; t = t.BaseType)
+                sio = t.GetField("_superIO", BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(hw);
+            if (sio is null) return "registers: no _superIO";
+            var st = sio.GetType();
+            const BindingFlags np = BindingFlags.NonPublic | BindingFlags.Instance;
+            var read = st.GetMethod("ReadByte", np, new[] { typeof(ushort) });
+            var regs = new[] { "FAN_CONTROL_MODE_REG", "FAN_PWM_COMMAND_REG", "FAN_PWM_OUT_REG" }
+                .Select(n => (ushort[]?)st.GetField(n, np)?.GetValue(sio)).ToArray();
+            if (read is null || regs.Any(r => r is null || r.Length <= index)) return "registers: layout unknown";
+            var mutexes = typeof(Computer).Assembly.GetType("LibreHardwareMonitor.Hardware.Mutexes");
+            var wait = mutexes?.GetMethod("WaitIsaBus", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+            var release = mutexes?.GetMethod("ReleaseIsaBus", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+            if (wait is null || release is null) return "registers: no ISA mutex";
+            if (!(bool)wait.Invoke(null, new object[] { 100 })!) return "registers: ISA bus busy";
+            try
+            {
+                var b = regs.Select(r => (byte)read.Invoke(sio, new object[] { r![index] })!).ToArray();
+                return $"mode=0x{b[0]:X2} cmd=0x{b[1]:X2} out=0x{b[2]:X2}";
+            }
+            finally { release.Invoke(null, null); }
+        }
+        catch (Exception ex)
+        {
+            return "registers: " + ex.GetType().Name;
+        }
+    }
+
+    private IEnumerable<IHardware> AllHardware()
+    {
+        static IEnumerable<IHardware> Walk(IHardware h) => new[] { h }.Concat(h.SubHardware.SelectMany(Walk));
+        return _computer.Hardware.SelectMany(Walk);
+    }
+
     private static bool IsPublishedEcSensor(ISensor s) =>
         s.SensorType == SensorType.Temperature && s.Name == "VRM";
 
@@ -247,6 +300,7 @@ public sealed class SensorCollector : BackgroundService
     {
         try
         {
+            _lastUpdateStart = DateTime.UtcNow;
             foreach (var hw in _computer.Hardware) hw.Accept(_visitor);
             _asusEc?.Update();
             EnforceRequestedControls();
