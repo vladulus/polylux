@@ -10,19 +10,20 @@ Two operations are supported:
    Single HID Output Report with prefix 0xEC 0x53 0x00. Used by the
    hardware-monitor mode in AC.
 
-2. `upload_image(gif_bytes)` — upload a custom GIF87a animation
-   (256×64 monochrome, ≤100KB) for the Custom Animation mode. The
-   upload sequence is:
+2. `upload_image(gif_bytes)` — upload and show a GIF animation
+   (256×64, ≤100KB). Sequence as AC 6.5.7 sends it for its "Image or
+   Animation" presets (scratch/captures/oled_presets_USBPcap1.pcap,
+   2026-10-25):
 
      HID ec 72 01 00 01 00 00 00      register upload
      HID ec 51 00 00 00 00 00 00      query / lock
      HID ec 73 01 00 00 00 00 00      start send
-     HID ec 7f 02 <sizeLE_lo> <sizeLE_hi> 00 00 00   bulk prep
+     HID ec 7f 02 <size 24-bit LE>    bulk prep
      BULK OUT iface 0 ep 0x01         GIF bytes + zero pad to 4096B
-
-   Note: the OLED may need to be in "Custom Animation" mode in firmware
-   for the uploaded image to actually be displayed (vs the default
-   Hardware Monitor mode). Mode-switch protocol TBD.
+     HID ec 73 ff 00 00 00 00 00      end of send
+     HID ec 51 10 01 01 00 00 00      switch to image mode
+     HID ec dc 00 ...                 status query (reply ec 5c 00 01 .. 10)
+     HID ec 5c 01 01 00 00 00 00 10   activate
 
 Usage::
 
@@ -86,14 +87,25 @@ def build_text_packet(label: str, value: str) -> bytes:
     return bytes(pkt)
 
 
+def build_image_commit_packets() -> tuple[bytes, ...]:
+    """The 4 HID packets AC sends after the bulk transfer: end-of-send,
+    image mode, status query, activate."""
+    pad = lambda head: bytes(head) + b"\x00" * (HID_PACKET_SIZE - len(head))
+    return (
+        pad([0xEC, 0x73, 0xFF]),
+        pad([0xEC, 0x51, 0x10, 0x01, 0x01]),
+        pad([0xEC, 0xDC]),
+        pad([0xEC, 0x5C, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x10]),
+    )
+
+
 def build_image_prep_packets(image_size: int) -> tuple[bytes, bytes, bytes, bytes]:
     """Return the 4 HID prep packets that precede a bulk OUT image upload.
 
     Each is 65 bytes (full HID Output Report length).
     Sequence: (register, query/lock, start, bulk-prep-with-size).
     """
-    size_lo = image_size & 0xFF
-    size_hi = (image_size >> 8) & 0xFF
+    size = image_size.to_bytes(3, "little")
     p72 = bytes([0xEC, 0x72, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00]) + b"\x00" * 57
     p51 = bytes([0xEC, 0x51, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]) + b"\x00" * 57
     p73 = bytes([0xEC, 0x73, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]) + b"\x00" * 57
@@ -155,16 +167,13 @@ class LiveDashOLED:
         self.chip.hid_write(pkt)
 
     def upload_image(self, image_bytes: bytes) -> None:
-        """Upload a GIF87a custom animation to the OLED (256×64, mono).
+        """Upload a GIF animation to the OLED (256×64) and show it.
 
         Args:
-          image_bytes: raw GIF87a file contents. Max ~100KB per AC UI docs.
+          image_bytes: raw GIF file contents. Max ~100KB per AC UI docs.
 
-        Note: this only uploads the image to firmware. The OLED may be
-        in Hardware Monitor mode and won't display the custom image
-        until switched to Custom Animation mode. Mode-switch is TBD —
-        document for users that they may need to reboot or apply
-        Custom Animation in AC at least once.
+        Leaves the OLED in image mode; the next set_text() re-arms text
+        mode with ec 51 09.
         """
         if not image_bytes.startswith(b"GIF8"):
             raise ValueError("image_bytes must be a GIF file (magic 'GIF8...')")
@@ -180,7 +189,7 @@ class LiveDashOLED:
         p72, p51, p73, p7f = build_image_prep_packets(size)
         for pkt in (p72, p51, p73, p7f):
             self.chip.hid_write(pkt)
-            time.sleep(0.05)
+            time.sleep(0.3)
 
         # Pad to next 4KB boundary, send as one bulk transfer.
         padded_len = ((size + OLED_BULK_CHUNK - 1) // OLED_BULK_CHUNK) * OLED_BULK_CHUNK
@@ -190,6 +199,10 @@ class LiveDashOLED:
             raise LiveDashOLEDError(
                 f"OLED bulk write incomplete: {n}/{padded_len}"
             )
+        for pkt in build_image_commit_packets():
+            time.sleep(0.3)
+            self.chip.hid_write(pkt)
+        self._text_mode_armed = False
 
     def send_raw_hid(self, packet: bytes) -> None:
         """Send a raw HID Output Report. For experimenting with undecoded

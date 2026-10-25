@@ -128,8 +128,8 @@ Ordered by impact for v0.5 public launch.
     first or reset `_text_mode_armed`)
   - §10b hardware safety: no firmware writes, no driver swaps without
     explicit consent, backup before mutate
-  - §9.2: OLED Custom Image upload blocked by firmware bug — never
-    expose as a scene
+  - §9.2: OLED Custom Image works with AC's full sequence (2026-10-25
+    capture); driver updated, live test from Polylux pending
   - §9.4.1: Aura RGB default types is `("MOTHERBOARD",)` — adding
     KEYBOARD / MOUSE clobbers per-key effects, must show warning
   - "Polylux replaces AC" — every UI/feature decision flows from this

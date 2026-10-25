@@ -595,31 +595,18 @@ user explicitly selects one in the UI. Polylux should do the same.
 
   Upload completes USB-side without errors.
 
-  **Custom Image display activation — BLOCKED by ASUS firmware bug on
-  Z690 Extreme** (verified 2026-05-12 with Vlad):
+  **Custom Image display works** (2026-10-25, `oled_presets_USBPcap1.pcap`):
+  AC 6.5.7's "Image or Animation" presets are GIF89a 256×64 files sent
+  through this same upload, and all 9 Vlad applied appeared on the OLED.
+  The May 2026 conclusion ("blocked by ASUS firmware bug, AC fails too")
+  was wrong for this sequence. What AC sends that Polylux did not:
 
-  - Tested every plausible activation: `ec 51 10` with sub-bytes
-    (00 00, 01 01, 02 02, ...), `ec 5c 01 01`, `ec 5d 01 01`,
-    `ec 71 01 01`, `ec af 01 01`, slot sweep 0x16..0x24. Result:
-    `ec 51 10 01 01` is Q-Code mode (CONFIRMED, supersedes earlier
-    misidentification); no slot or sub-byte combination activates
-    the uploaded image content. Display either stays in Q-Code or
-    goes black.
-  - **AC itself fails identically**: Vlad confirmed that when he
-    clicks Apply on OLED Custom Image in Armoury Crate's own UI on
-    this motherboard, OLED also shows black. This is not a Polylux
-    limitation — the chip firmware silently rejects the displayed
-    custom image regardless of which userland app sends it.
-  - ROG forum thread "Z690 Extreme OLED issue" (m-p/912971) and
-    cross-board discussion confirms: this is a known firmware bug on
-    Z690 Extreme that ASUS has not patched. On the previous-gen Z490
-    Extreme, the analogous bug took ~6 months for ASUS to fix via a
-    BIOS update that flashed updated chip firmware.
+    - 24-bit size in ec 7f 02 (Polylux dropped the third byte)
+    - ec 73 ff after the bulk (documented above, missing in code)
+    - activation tail: ec 51 10 01 01, ec dc, ec 5c 01 01 00 00 00 00 10
 
-  Sources:
-    https://rog-forum.asus.com/t5/armoury-crate/z690-extreme-oled-issue/m-p/912971
-    https://rog-forum.asus.com/t5/asus-software/armoury-crate-turn-off-livedash-oled/m-p/860938
-    https://rog-forum.asus.com/t5/asus-software/livedash-custom-image-animation-info-needed/td-p/807615
+  Same BIOS (4505) as in May. The driver now sends AC's sequence; not yet
+  tested live from Polylux.
 
   **Polylux scope decision**: keep upload protocol implemented in
   driver (byte-correct, ready for the day firmware is fixed) but
@@ -642,12 +629,35 @@ GIF89a 320×240). Wire sequence:
     BULK OUT ep0x01  GIF89a bytes (320×240) + zero pad in 4096B chunks
     HID INT OUT 65B  ec 73 ff 00 00 00 00 00        end / commit upload
 
-Display activation: same situation as OLED — bytes leave the host
-correctly but the LCD keeps showing its built-in hardware-monitor mode
-(Aac3572MbHal_x86.exe writes hardware-monitor data autonomously even
-without ROGLiveService running). Next session: capture a session where
-AC switches the LCD from hardware-monitor to a custom image, see what
-command flips that state.
+Display activation (decoded 2026-10-25 from `ryujin_steps_USBPcap1.pcap`,
+one AC action per step, times in `ryujin_steps_markers.txt`; Ryujin is
+dev 15 in that capture, its HID commands use the same `ec` prefix):
+
+    upload JPEG still:  ec 71 01 01, ec f1, ec 72 01 01 01, ec 73 01,
+                        ec 7f 02 <size 24-bit LE>, BULK raw JFIF bytes
+                        (no conversion — AC sends the .jpg as-is),
+                        ec 73 ff, ec 5c <settings>, ec 5d 00 01 11 01 01 05,
+                        ec 51 11 01 01            → shown on the LCD (Vlad)
+    Hardware Monitor:   ec 51 21 + ec 52 <layout> (00 00 02 02 single,
+                        00 03 02 02 quad; ec 53 NN <label> per slot)
+    Custom Banner:      ec 55 01 02, ec 55 02 <i> ... text segments,
+                        ec 51 04
+    Firmware animation: ec 5d 00 01 10 01 01 05 + ec 51 10 01 01
+
+`ec 5c 01 00 64 <b5> <b6> 64 <b8> 00 <b10> 00 <b12> <b13> 00 <b15>` is the
+settings block AC resends on every change. Bytes seen moving with one UI
+action each:
+
+    b5  01 → 00   orientation vertical → horizontal
+    b6  00 → 01   display ON switch → OFF (b8 14 → 00 with it)
+    b10, b15  00 → 01   Default Animation 1st → 2nd
+    b12  3c → 64  Brightness 60% → 100%
+    b12,b13  64 14 → 00 00   Standby Mode ON → OFF [Ghicesc: standby
+                             brightness + timeout share these bytes]
+
+`ec 21 00 00 NN` (NN 00→ff in 10 steps, from the earlier `ryujin_USBPcap1`
+capture) is an unidentified slider — [Ghicesc] pump/fan duty from the
+Fan Control tab. `ec 99 / a0 / a1 / dc` are periodic status reads.
 
 ### 9.4 Aura RGB — protocol decoded but write blocked
 
@@ -1767,8 +1777,8 @@ Plan: `docs/superpowers/plans/2026-05-13-tabbed-ui-redesign.md`.
     Per-preset selection needs USBPcap of AC switching between
     presets.
 
-  - **OLED custom_image** — blocked by ASUS firmware bug §9.2 on Z690
-    Extreme (upload completes, display ignores). Not exposed.
+  - **OLED custom_image** — works with AC's full sequence (§9.2,
+    2026-10-25); not yet exposed as a scene.
 
   - **Ryujin custom_image** — upload protocol §9.3 decoded but live
     display behavior untested; may share the OLED firmware bug or not.
