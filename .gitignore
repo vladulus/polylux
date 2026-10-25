@@ -16,6 +16,7 @@ dist/
 # Inside scratch/, keep .py / .js / .md / .txt (research notes); ignore everything else.
 scratch/captures/
 scratch/backups/
+scratch/asus_reference/
 scratch/**/*.pcap
 scratch/**/*.pcapng
 scratch/**/*.bin
