@@ -438,7 +438,7 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
     temps = LHMSensors()
     fans_sent = None
     next_fan_tick = next_monitor_tick = 0.0
-    applied = None
+    applied = failed_upload = None
     while not stop.is_set():
         if lcd is None:
             # The AIO re-enumerates when its firmware restarts; old handles
@@ -459,7 +459,7 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
             standby=not rcfg.dark_when_off,
         )
         key = (rcfg.scene, rcfg.image_path, rcfg.image_stretch, settings)
-        if key != applied:
+        if key != applied and key != failed_upload:
             log.info("ryujin: apply scene=%s image=%s %s", rcfg.scene, rcfg.image_path, settings)
             try:
                 if rcfg.scene == "image" and rcfg.image_path:
@@ -480,10 +480,12 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
                 state.mark_update("ryujin_lcd", error=str(ex))
                 log.warning("ryujin update failed: %s", ex)
                 if rcfg.scene == "image":
-                    # A refused upload is retried only after the user changes
-                    # something; hammering it left the LCD stuck (2026-10-25).
-                    applied = key
-                if "not connected" in str(ex) or "No such device" in str(ex):
+                    # Retried only after the user changes something, even if
+                    # the LCD reboots: retrying a 4 MB GIF rebooted it in a
+                    # loop (2026-10-25).
+                    failed_upload = key
+                if "not connected" in str(ex) or "No such device" in str(ex) \
+                        or "read error" in str(ex):
                     lcd.close()
                     lcd = None
                     continue

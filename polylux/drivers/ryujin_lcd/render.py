@@ -42,6 +42,20 @@ def ryujin_image(path: str | Path, stretch: bool = False, portrait: bool = False
         for frame in ImageSequence.Iterator(src):
             frames.append(_fit(frame, stretch, portrait).convert("P", palette=Image.Palette.ADAPTIVE))
             durations.append(int(frame.info.get("duration", 100)) or 100)
-    frames[0].save(buf, format="GIF", save_all=True, append_images=frames[1:],
-                   duration=durations, loop=0, optimize=True)
-    return buf.getvalue()
+
+    def encode() -> bytes:
+        buf = io.BytesIO()
+        frames[0].save(buf, format="GIF", save_all=True, append_images=frames[1:],
+                       duration=durations, loop=0, optimize=True)
+        return buf.getvalue()
+
+    data = encode()
+    # A 4.2 MB GIF made the LCD reboot mid-upload (2026-10-25); AC's own
+    # was 1.7 MB and 2.6 MB went through. Thin frames until under the cap.
+    while len(data) > MAX_GIF_BYTES and len(frames) > 1:
+        frames, durations = frames[::2], [d * 2 for d in durations[::2]]
+        data = encode()
+    return data
+
+
+MAX_GIF_BYTES = 2 * 1024 * 1024
