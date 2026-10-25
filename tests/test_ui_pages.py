@@ -35,3 +35,15 @@ def test_every_scene_builds_and_validates(qtbot, qapp, state, page_mod, cls, sce
     for scene in scenes:
         p.set_scene(scene)
         assert p.active_scene() == scene
+
+
+def test_fans_page_shows_ryujin_card(qtbot, qapp, state):
+    from polylux.ui.pages.fans import FansPage
+    state.update_device("ryujin_lcd", {"enabled": True})
+    state.set_frame("ryujin_fans", {"liquid_c": 28.1, "rpm_1": 2760, "rpm_2": 1890,
+                                    "aio_rpm": 1350, "aio_pct": 43, "aio_temp": 38.0,
+                                    "pump_pct": 100, "embedded_pct": 30})
+    p = FansPage(state)
+    qtbot.addWidget(p)
+    p._ryujin_card.refresh()
+    assert "2760 rpm" in p._ryujin_card._readout.text()

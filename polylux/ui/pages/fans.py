@@ -34,6 +34,7 @@ from polylux.config import FanConfig
 from polylux.sensors.fan_control import _post as fan_post
 from polylux.ui.state import ServiceState
 from polylux.ui.widgets.gauge import RadialGauge
+from polylux.ui.widgets.slider_row import SliderRow
 
 
 log = logging.getLogger(__name__)
@@ -521,6 +522,45 @@ class _FanGaugeCard(QFrame):
 # Page
 # ---------------------------------------------------------------------------
 
+class _RyujinFansCard(QFrame):
+    """Ryujin II: live readings from the AIO (run_ryujin publishes them as
+    the "ryujin_fans" frame) + pump / embedded-fan percentages. The AIO
+    fans follow ryujin_lcd.aio_curve on CPU package temperature."""
+
+    def __init__(self, state: ServiceState) -> None:
+        super().__init__()
+        self.setObjectName("card")
+        self._state = state
+        v = QVBoxLayout(self)
+        v.setContentsMargins(16, 12, 16, 12)
+        v.setSpacing(10)
+        head = QLabel("RYUJIN II · AIO")
+        hf = head.font(); hf.setBold(True); head.setFont(hf)
+        v.addWidget(head)
+        self._readout = QLabel("waiting for the AIO…")
+        self._readout.setObjectName("dim")
+        v.addWidget(self._readout)
+        cfg = state.snapshot().ryujin_lcd
+        for key, label in (("pump_pct", "PUMP"),
+                           ("embedded_fan_pct", "PUMP-HEAD FAN (VRM)")):
+            row = SliderRow(label=label, minimum=0, maximum=100,
+                            value=getattr(cfg, key), fmt="{v}%")
+            row.value_changed.connect(
+                lambda val, k=key: self._state.update_device("ryujin_lcd", {k: val})
+            )
+            v.addWidget(row)
+
+    def refresh(self) -> None:
+        s = self._state.last_frame("ryujin_fans")
+        if not s:
+            return
+        self._readout.setText(
+            f"liquid {s['liquid_c']:.1f} °C · pump {s['rpm_1']} rpm · "
+            f"pump-head fan {s['rpm_2']} rpm · radiator fans {s['aio_rpm']} rpm "
+            f"@ {s['aio_pct']}% (CPU {s['aio_temp']} °C)"
+        )
+
+
 class FansPage(QWidget):
 
     _cal_tick = pyqtSignal(int)        # cross-thread: seconds_remaining
@@ -578,6 +618,11 @@ class FansPage(QWidget):
         self._cards_grid.setSpacing(14)
         self._cards_grid.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(self._cards_holder, 1)
+        self._ryujin_card: Optional[_RyujinFansCard] = None
+        if state.snapshot().ryujin_lcd.enabled:
+            self._ryujin_card = _RyujinFansCard(state)
+            outer.addSpacing(14)
+            outer.addWidget(self._ryujin_card)
         outer.addStretch(0)
 
         # First-time discovery + maybe-calibrate
@@ -679,6 +724,8 @@ class FansPage(QWidget):
             self._fan_to_card[fan.sensor_id] = card
 
     def _refresh_live(self) -> None:
+        if self._ryujin_card is not None:
+            self._ryujin_card.refresh()
         rpms = _rpm_snapshot()
         for fan in self._state.snapshot().fans.fans:
             card = self._fan_to_card.get(fan.sensor_id)

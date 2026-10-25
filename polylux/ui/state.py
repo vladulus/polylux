@@ -51,10 +51,11 @@ class ServiceState:
         self._last_frames: dict[str, Any] = {
             "matrix": None, "oled": None,
             "ryujin_lcd": None, "aura_rgb": None,
+            "ryujin_fans": None,   # dict from run_ryujin: rpms, liquid °C, %s
         }
         self._frame_listeners: dict[str, list[Callable[[Any], None]]] = {
             "matrix": [], "oled": [],
-            "ryujin_lcd": [], "aura_rgb": [],
+            "ryujin_lcd": [], "aura_rgb": [], "ryujin_fans": [],
         }
 
     # --- read API ---

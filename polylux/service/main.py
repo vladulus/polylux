@@ -513,6 +513,8 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
                     log.info("ryujin fans: pump %d%% embedded %d%% aio %d%% (%s=%s)",
                              *target, rcfg.aio_temp_source, temp)
                     fans_sent = target
+                state.set_frame("ryujin_fans", {**lcd.read_status(), "aio_pct": target[2],
+                                                "aio_temp": temp})
             except Exception as ex:
                 log.warning("ryujin fan tick failed: %s", ex)
                 if "not connected" in str(ex) or "No such device" in str(ex) or "reply within" in str(ex):
