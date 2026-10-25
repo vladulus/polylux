@@ -540,7 +540,11 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
         if rcfg.fans_enabled and time.monotonic() >= next_fan_tick:
             next_fan_tick = time.monotonic() + 4.0
             try:
-                temp = temps.temps().get(rcfg.aio_temp_source.lower())
+                status = lcd.read_status()
+                if rcfg.aio_temp_source.lower() == "liquid":
+                    temp = status["liquid_c"]
+                else:
+                    temp = temps.temps().get(rcfg.aio_temp_source.lower())
                 aio = interpolate_curve(list(rcfg.aio_curve), temp) if temp is not None else 100.0
                 pump = rcfg.pump_pct
                 if rcfg.pump_mode == "curve":
@@ -556,8 +560,8 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
                     log.info("ryujin fans: pump %d%% embedded %d%% aio %d%% (%s=%s)",
                              *target, rcfg.aio_temp_source, temp)
                     fans_sent = target
-                state.set_frame("ryujin_fans", {**lcd.read_status(), "aio_pct": target[2],
-                                                "aio_temp": temp})
+                state.set_frame("ryujin_fans", {**status, "aio_pct": target[2],
+                                                "aio_temp": temp, "pump_target": pump})
             except Exception as ex:
                 log.warning("ryujin fan tick failed: %s", ex)
                 if "not connected" in str(ex) or "No such device" in str(ex) or "reply within" in str(ex):

@@ -535,8 +535,8 @@ class _FanGaugeCard(QFrame):
 
 class _RyujinFansCard(QFrame):
     """Ryujin II: live readings from the AIO (run_ryujin publishes them as
-    the "ryujin_fans" frame) + pump / embedded-fan percentages. The AIO
-    fans follow ryujin_lcd.aio_curve on CPU package temperature."""
+    the "ryujin_fans" frame), the pump curve (CPU temperature), the radiator
+    fan curve (liquid temperature) and the pump-head fan percentage."""
 
     def __init__(self, state: ServiceState) -> None:
         super().__init__()
@@ -552,19 +552,12 @@ class _RyujinFansCard(QFrame):
         self._readout.setObjectName("dim")
         v.addWidget(self._readout)
         cfg = state.snapshot().ryujin_lcd
-        v.addWidget(QLabel(f"PUMP — curve on {cfg.pump_temp_source.upper()} (never below 30 %)"))
-        grid = QGridLayout()
-        self._pump_spins: list[tuple[QDoubleSpinBox, QDoubleSpinBox]] = []
-        for i, (t, d) in enumerate(cfg.pump_curve):
-            st = QDoubleSpinBox(); st.setRange(20, 100); st.setSuffix(" °C"); st.setDecimals(0); st.setValue(t)
-            sd = QDoubleSpinBox(); sd.setRange(30, 100); sd.setSuffix(" %"); sd.setDecimals(0); sd.setValue(d)
-            st.valueChanged.connect(self._save_pump_curve)
-            sd.valueChanged.connect(self._save_pump_curve)
-            grid.addWidget(QLabel(f"PT {i + 1}"), i, 0)
-            grid.addWidget(st, i, 1)
-            grid.addWidget(sd, i, 2)
-            self._pump_spins.append((st, sd))
-        v.addLayout(grid)
+        self._pump = self._curve_editor(
+            v, f"PUMP — curve on {cfg.pump_temp_source.upper()} (never below 30 %)",
+            cfg.pump_curve, 30, lambda c: {"pump_curve": c, "pump_mode": "curve"})
+        self._aio = self._curve_editor(
+            v, f"RADIATOR FANS — curve on {cfg.aio_temp_source.upper()}",
+            cfg.aio_curve, 0, lambda c: {"aio_curve": c})
         row = SliderRow(label="PUMP-HEAD FAN (VRM)", minimum=0, maximum=100,
                         value=cfg.embedded_fan_pct, fmt="{v}%")
         row.value_changed.connect(
@@ -572,18 +565,34 @@ class _RyujinFansCard(QFrame):
         )
         v.addWidget(row)
 
-    def _save_pump_curve(self) -> None:
-        curve = tuple((st.value(), sd.value()) for st, sd in self._pump_spins)
-        self._state.update_device("ryujin_lcd", {"pump_curve": curve, "pump_mode": "curve"})
+    def _curve_editor(self, v, title, curve, min_pct, patch):
+        v.addWidget(QLabel(title))
+        grid = QGridLayout()
+        spins: list[tuple[QDoubleSpinBox, QDoubleSpinBox]] = []
+
+        def save():
+            self._state.update_device(
+                "ryujin_lcd", patch(tuple((st.value(), sd.value()) for st, sd in spins)))
+
+        for i, (t, d) in enumerate(curve):
+            st = QDoubleSpinBox(); st.setRange(15, 100); st.setSuffix(" °C"); st.setDecimals(0); st.setValue(t)
+            sd = QDoubleSpinBox(); sd.setRange(min_pct, 100); sd.setSuffix(" %"); sd.setDecimals(0); sd.setValue(d)
+            st.valueChanged.connect(save)
+            sd.valueChanged.connect(save)
+            grid.addWidget(QLabel(f"PT {i + 1}"), i, 0)
+            grid.addWidget(st, i, 1)
+            grid.addWidget(sd, i, 2)
+            spins.append((st, sd))
+        v.addLayout(grid)
+        return spins
 
     def refresh(self) -> None:
         s = self._state.last_frame("ryujin_fans")
         if not s:
             return
         self._readout.setText(
-            f"liquid {s['liquid_c']:.1f} °C · pump {s['rpm_1']} rpm · "
-            f"pump-head fan {s['rpm_2']} rpm · radiator fans {s['aio_rpm']} rpm "
-            f"@ {s['aio_pct']}% (CPU {s['aio_temp']} °C)"
+            f"liquid {s['liquid_c']:.1f} °C · pump {s['rpm_1']} rpm @ {s.get('pump_target', '?')}% · "
+            f"pump-head fan {s['rpm_2']} rpm · radiator fans {s['aio_rpm']} rpm @ {s['aio_pct']}%"
         )
 
 

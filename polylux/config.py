@@ -200,9 +200,11 @@ class RyujinLcdConfig:
     pump_curve: tuple[tuple[float, float], ...] = (
         (30.0, 35.0), (50.0, 50.0), (70.0, 80.0), (85.0, 100.0))
     embedded_fan_pct: int = 30       # ec 1a b4 — the fan on the pump head, cools the VRMs
-    aio_temp_source: str = "cpu package"
-    aio_curve: tuple[tuple[float, float], ...] = (   # (°C, %) — AC's Smart default
-        (20.0, 20.0), (36.0, 40.0), (55.0, 70.0), (85.0, 100.0))
+    # Radiator fans follow the liquid temperature the pump reports (ec 99),
+    # or any LHM sensor name. Liquid idled at 28–29 °C on 2026-10-25.
+    aio_temp_source: str = "liquid"
+    aio_curve: tuple[tuple[float, float], ...] = (   # (°C, %)
+        (30.0, 30.0), (34.0, 50.0), (38.0, 75.0), (42.0, 100.0))
 
     # Hardware Monitor: 4 (label, source) slots. source = an LHM temperature
     # name ("cpu package", "gpu core", "temperature #1"…), "liquid",
