@@ -424,6 +424,36 @@ def run_fans(state: ServiceState, stop: threading.Event) -> None:
         stop.wait(max(0.5, fcfg.update_seconds))
 
 
+def _monitor_values(temps, lcd):
+    """Return source -> display string for the Ryujin monitor slots, reading
+    each sensor family once per tick (sources: see RyujinLcdConfig)."""
+    import psutil
+
+    t = temps.temps()
+    fans = {f.name.lower(): f.rpm for f in temps.fans()}
+    cache: dict = {}
+
+    def value(source: str) -> str:
+        s = source.lower()
+        if s == "liquid":
+            if "liquid" not in cache:
+                cache["liquid"] = lcd.read_status()["liquid_c"]
+            return f"{cache['liquid']:.1f}℃"
+        if s == "cpu_pct":
+            return f"{psutil.cpu_percent():.0f}%"
+        if s == "mem_pct":
+            return f"{psutil.virtual_memory().percent:.0f}%"
+        if s == "gpu_pct":
+            return _read_value_source("gpu_pct")
+        if s.startswith("rpm:"):
+            rpm = fans.get(s[4:])
+            return f"{rpm}rpm" if rpm is not None else "--"
+        v = t.get(s)
+        return f"{v:.1f}℃" if v is not None else "--"
+
+    return value
+
+
 def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
     """Apply Ryujin scene + settings whenever they change (§9.3)."""
     from polylux.drivers.ryujin_lcd.driver import (
@@ -494,16 +524,9 @@ def run_ryujin(lcd, state: ServiceState, stop: threading.Event) -> None:
         if rcfg.scene == "hardware_monitor" and time.monotonic() >= next_monitor_tick:
             next_monitor_tick = time.monotonic() + 2.0
             try:
-                import psutil
-                t = temps.temps()
-                status = lcd.read_status()
-                fmt = lambda v: f"{v:.1f}℃" if v is not None else "--"
-                slots = (("CPU Temp.", fmt(t.get("cpu package"))),
-                         ("GPU Temp.", fmt(t.get("gpu core"))),
-                         ("Liquid Temp.", fmt(status["liquid_c"])),
-                         ("CPU Usage", f"{psutil.cpu_percent():.0f}%"))
-                for i, (label, value) in enumerate(slots):
-                    lcd.command(build_monitor_packet(i, label, value))
+                values = _monitor_values(temps, lcd)
+                for i, (label, source) in enumerate(rcfg.monitor_slots):
+                    lcd.command(build_monitor_packet(i, label, values(source)))
                 lcd.command(MONITOR_LAYOUT_QUAD)
             except Exception as ex:
                 log.warning("ryujin monitor tick failed: %s", ex)

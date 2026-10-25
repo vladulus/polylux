@@ -199,11 +199,20 @@ class RyujinLcdConfig:
     aio_curve: tuple[tuple[float, float], ...] = (   # (°C, %) — AC's Smart default
         (20.0, 20.0), (36.0, 40.0), (55.0, 70.0), (85.0, 100.0))
 
+    # Hardware Monitor: 4 (label, source) slots. source = an LHM temperature
+    # name ("cpu package", "gpu core", "temperature #1"…), "liquid",
+    # "cpu_pct", "gpu_pct", "mem_pct" or "rpm:<LHM fan name>".
+    monitor_slots: tuple[tuple[str, str], ...] = (
+        ("CPU Temp.", "cpu package"), ("GPU Temp.", "gpu core"),
+        ("Liquid Temp.", "liquid"), ("CPU Usage", "cpu_pct"))
+
     SCENES = ("hardware_monitor", "image", "animation", "off")
 
     def validate(self) -> None:
         if self.scene not in self.SCENES:
             raise ValueError(f"ryujin_lcd.scene must be one of {self.SCENES}, got {self.scene!r}")
+        if len(self.monitor_slots) != 4:
+            raise ValueError("ryujin_lcd.monitor_slots needs exactly 4 (label, source) pairs")
         if not 0 <= self.animation <= 2:
             raise ValueError(f"ryujin_lcd.animation must be 0..2, got {self.animation}")
         for name in ("pump_pct", "embedded_fan_pct"):
@@ -409,6 +418,8 @@ def load(path: str | Path = DEFAULT_CONFIG_PATH) -> PolyluxConfig:
     cfg.ryujin_lcd.aio_temp_source = str(r.get("aio_temp_source", cfg.ryujin_lcd.aio_temp_source))
     if isinstance(r.get("aio_curve"), list):
         cfg.ryujin_lcd.aio_curve = tuple((float(t), float(d)) for t, d in r["aio_curve"])
+    if isinstance(r.get("monitor_slots"), list) and len(r["monitor_slots"]) == 4:
+        cfg.ryujin_lcd.monitor_slots = tuple((str(l), str(s)) for l, s in r["monitor_slots"])
 
     a = raw.get("aura_rgb") or {}
     cfg.aura_rgb.enabled = bool(a.get("enabled", False))

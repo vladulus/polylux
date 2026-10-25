@@ -647,6 +647,14 @@ class FansPage(QWidget):
         if not pairs:
             self._status_lbl.setText("● no daemon at 127.0.0.1:8085 — can't discover fans")
             return
+        # A configured fan whose header showed no RPM since the sensor daemon
+        # started (= this boot) has been unplugged or moved: drop it.
+        live = {p["sensor_id"] for p in pairs}
+        kept = [f for f in self._state.snapshot().fans.fans if f.sensor_id in live]
+        if len(kept) != len(self._state.snapshot().fans.fans):
+            log.info("fans: dropping %d unplugged fan(s)",
+                     len(self._state.snapshot().fans.fans) - len(kept))
+            self._state.update_device("fans", {"fans": kept})
         existing = {f.sensor_id for f in self._state.snapshot().fans.fans}
         new_list = list(self._state.snapshot().fans.fans)
         for p in pairs:

@@ -9,13 +9,28 @@ from __future__ import annotations
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
-    QCheckBox, QFileDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+    QVBoxLayout, QWidget,
 )
 
 from polylux.config import RyujinLcdConfig
 from polylux.ui.pages.base import DevicePage
 from polylux.ui.widgets.live_preview import RyujinLivePreview
 from polylux.ui.widgets.seg_button import SegButton
+
+
+def _monitor_sources() -> list[str]:
+    """Everything run_ryujin can show: live LHM temperatures, fan RPMs and
+    the special sources (see RyujinLcdConfig.monitor_slots)."""
+    out = ["liquid", "cpu_pct", "gpu_pct", "mem_pct"]
+    try:
+        from polylux.sensors.lhm import LHMSensors
+        s = LHMSensors()
+        out += sorted(s.temps())
+        out += [f"rpm:{f.name.lower()}" for f in s.fans() if f.rpm > 0]
+    except Exception:  # noqa: BLE001 — daemon down: specials only
+        pass
+    return out
 
 
 class RyujinPage(DevicePage):
@@ -58,6 +73,24 @@ class RyujinPage(DevicePage):
                 lambda on: self._state.update_device("ryujin_lcd", {"image_stretch": on})
             )
             v.addWidget(stretch)
+        elif scene == "hardware_monitor":
+            v.addWidget(QLabel("FOUR VALUES ON THE LCD — LABEL + SENSOR"))
+            sources = _monitor_sources()
+            self._slot_widgets = []
+            for label, source in cfg.monitor_slots:
+                row = QHBoxLayout()
+                lab = QLineEdit(label)
+                lab.setMaxLength(24)
+                src = QComboBox()
+                src.setEditable(True)
+                src.addItems(sources if source in sources else [source, *sources])
+                src.setCurrentText(source)
+                lab.editingFinished.connect(self._save_slots)
+                src.currentTextChanged.connect(lambda _t: self._save_slots())
+                row.addWidget(lab, 2)
+                row.addWidget(src, 3)
+                v.addLayout(row)
+                self._slot_widgets.append((lab, src))
         elif scene == "animation":
             seg = SegButton(options=[("1", 0), ("2", 1), ("3", 2)], value=cfg.animation)
             seg.value_changed.connect(
@@ -66,12 +99,16 @@ class RyujinPage(DevicePage):
             v.addWidget(QLabel("BUILT-IN ANIMATION"))
             v.addWidget(seg)
         else:
-            lbl = QLabel("(firmware-driven — no extra config)" if scene == "hardware_monitor"
-                         else "(display off)")
+            lbl = QLabel("(display off)")
             lbl.setObjectName("dim")
             v.addWidget(lbl)
         v.addStretch(1)
         return w
+
+    def _save_slots(self) -> None:
+        slots = tuple((lab.text().strip() or src.currentText(), src.currentText().strip())
+                      for lab, src in self._slot_widgets)
+        self._state.update_device("ryujin_lcd", {"monitor_slots": slots})
 
     def _on_pick_image(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

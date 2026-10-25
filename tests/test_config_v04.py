@@ -139,3 +139,19 @@ def test_yaml_ryujin_fields(tmp_path: Path):
     assert cfg.ryujin_lcd.dark_when_off is True
     assert cfg.service.dark_when_off is False
 
+
+
+def test_yaml_ryujin_monitor_slots(tmp_path: Path):
+    p = tmp_path / "polylux.yaml"
+    p.write_text(textwrap.dedent("""
+        ryujin_lcd:
+          monitor_slots:
+          - [CPU, cpu package]
+          - [VRM, temperature #2]
+          - [Water, liquid]
+          - [Top fan, "rpm:fan #1"]
+    """), encoding="utf-8")
+    cfg = load(p)
+    cfg.validate()
+    assert cfg.ryujin_lcd.monitor_slots[1] == ("VRM", "temperature #2")
+    assert cfg.ryujin_lcd.monitor_slots[3] == ("Top fan", "rpm:fan #1")
