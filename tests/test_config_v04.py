@@ -147,7 +147,7 @@ def test_yaml_ryujin_monitor_slots(tmp_path: Path):
         ryujin_lcd:
           monitor_slots:
           - [CPU, cpu package]
-          - [VRM, temperature #2]
+          - [VRM, "temperature #2"]
           - [Water, liquid]
           - [Top fan, "rpm:fan #1"]
     """), encoding="utf-8")
